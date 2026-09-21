@@ -12,6 +12,7 @@ coverage/
 # Environment & Secrets (NEVER COMMIT)
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.crt

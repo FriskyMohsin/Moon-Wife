@@ -1,4 +1,6 @@
 import express from 'express';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 export {
   getMasterKey,
   encryptCredential,
@@ -1227,9 +1229,12 @@ interface RelayTaskItem {
   id: string; // Deterministic correlation ID
   tool: string;
   params: any;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
   dispatchedAt: number;
   sentToRunnerAt?: number;
   completedAt?: number;
+  result?: any;
+  error?: string;
   resolve: (val: any) => void;
   reject: (err: any) => void;
   timer: NodeJS.Timeout;
@@ -1237,8 +1242,79 @@ interface RelayTaskItem {
 
 const relayTaskQueue: RelayTaskItem[] = [];
 const inFlightRelayTasks = new Map<string, RelayTaskItem>();
+const completedRelayTasks = new Map<string, any>();
 let activeRelayPollRes: express.Response | null = null;
 let activeRelayPollTimer: NodeJS.Timeout | null = null;
+
+function rememberCompletedTask(taskId: string, data: any) {
+  completedRelayTasks.set(taskId, data);
+  setTimeout(() => {
+    completedRelayTasks.delete(taskId);
+  }, 120000);
+}
+
+function triggerQueueDispatcher() {
+  if (relayTaskQueue.length === 0) return;
+
+  // 1. If an active long-poll runner is waiting, deliver immediately!
+  if (activeRelayPollRes) {
+    const pollRes = activeRelayPollRes;
+    activeRelayPollRes = null;
+    if (activeRelayPollTimer) {
+      clearTimeout(activeRelayPollTimer);
+      activeRelayPollTimer = null;
+    }
+    const nextTask = relayTaskQueue.shift()!;
+    nextTask.sentToRunnerAt = Date.now();
+    nextTask.status = 'RUNNING';
+    inFlightRelayTasks.set(nextTask.id, nextTask);
+    console.log(`[Queue Dispatcher][${nextTask.id}] Dispatched to long-poll runner: ${nextTask.tool}`);
+    return pollRes.json({ id: nextTask.id, tool: nextTask.tool, params: nextTask.params });
+  }
+
+  // 2. Dispatcher for tools capable of in-process execution when runner is not polling
+  const isDirectCapable = (tool: string) => {
+    return tool.startsWith('system.') || tool.startsWith('omniroute.') || tool.startsWith('dev.') || tool.startsWith('file.') || tool.startsWith('folder.');
+  };
+
+  setImmediate(async () => {
+    if (relayTaskQueue.length === 0) return;
+    const task = relayTaskQueue[0];
+    if (!task || task.status !== 'QUEUED') return;
+
+    // If an external runner recently polled (< 15s) and tool is not an immediate system check, give it a moment
+    const isSystemCheck = task.tool === 'system.health' || task.tool === 'system.node_version' || task.tool === 'system.system_info';
+    const runnerRecent = currentRunnerState.connectionMethod === 'relay' && Date.now() - (currentRunnerState.lastChecked || 0) < 15000;
+    if (runnerRecent && !isSystemCheck && (Date.now() - task.dispatchedAt < 1500)) {
+      return;
+    }
+
+    if (isDirectCapable(task.tool)) {
+      relayTaskQueue.shift();
+      task.sentToRunnerAt = Date.now();
+      task.status = 'RUNNING';
+      inFlightRelayTasks.set(task.id, task);
+      console.log(`[Queue Dispatcher][${task.id}] Direct execution via in-process runner engine: ${task.tool}`);
+      try {
+        const runnerEngine = require('./local-runner/runner.cjs');
+        const result = await runnerEngine.routeTool(task.tool, task.params || {});
+        task.status = 'COMPLETED';
+        task.completedAt = Date.now();
+        task.result = result;
+        inFlightRelayTasks.delete(task.id);
+        clearTimeout(task.timer);
+        task.resolve(result);
+      } catch (err: any) {
+        task.status = 'FAILED';
+        task.completedAt = Date.now();
+        task.error = err.message;
+        inFlightRelayTasks.delete(task.id);
+        clearTimeout(task.timer);
+        task.resolve({ success: false, error: err.message, correlationId: task.id });
+      }
+    }
+  });
+}
 
 function enqueueRelayTask(runnerToolName: string, params: any, correlationId: string): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -1249,9 +1325,13 @@ function enqueueRelayTask(runnerToolName: string, params: any, correlationId: st
       id: correlationId,
       tool: runnerToolName,
       params,
+      status: 'QUEUED',
       dispatchedAt,
       resolve: (data) => {
         clearTimeout(taskItem.timer);
+        taskItem.status = 'COMPLETED';
+        taskItem.completedAt = Date.now();
+        taskItem.result = data?.result !== undefined ? data.result : data;
         inFlightRelayTasks.delete(correlationId);
         const idx = relayTaskQueue.findIndex(t => t.id === correlationId);
         if (idx !== -1) relayTaskQueue.splice(idx, 1);
@@ -1264,20 +1344,54 @@ function enqueueRelayTask(runnerToolName: string, params: any, correlationId: st
           currentRunnerState.omnirouteVersion = res.version;
           currentRunnerState.lastChecked = Date.now();
         }
+        rememberCompletedTask(correlationId, {
+          id: correlationId,
+          taskId: correlationId,
+          tool: taskItem.tool,
+          status: 'COMPLETED',
+          result: taskItem.result,
+          dispatchedAt: taskItem.dispatchedAt,
+          sentToRunnerAt: taskItem.sentToRunnerAt,
+          completedAt: taskItem.completedAt,
+        });
         resolve(data.result !== undefined ? data.result : data);
       },
       reject: (err) => {
         clearTimeout(taskItem.timer);
+        taskItem.status = 'FAILED';
+        taskItem.completedAt = Date.now();
+        taskItem.error = err?.message || 'Execution error';
         inFlightRelayTasks.delete(correlationId);
         const idx = relayTaskQueue.findIndex(t => t.id === correlationId);
         if (idx !== -1) relayTaskQueue.splice(idx, 1);
+        rememberCompletedTask(correlationId, {
+          id: correlationId,
+          taskId: correlationId,
+          tool: taskItem.tool,
+          status: 'FAILED',
+          error: taskItem.error,
+          dispatchedAt: taskItem.dispatchedAt,
+          completedAt: taskItem.completedAt,
+        });
         resolve({ success: false, error: err.message || 'Execution error', correlationId });
       },
       timer: setTimeout(() => {
         const queueIdx = relayTaskQueue.findIndex(t => t.id === correlationId);
         if (queueIdx !== -1) relayTaskQueue.splice(queueIdx, 1);
+        taskItem.status = 'FAILED';
+        taskItem.completedAt = Date.now();
+        taskItem.error = `Local Tool Runner relay request timed out after ${timeoutMs}ms.`;
         inFlightRelayTasks.delete(correlationId);
         console.error(`[RELAY TRACE][${correlationId}] TIMEOUT after ${timeoutMs}ms. tool=${runnerToolName}`);
+        rememberCompletedTask(correlationId, {
+          id: correlationId,
+          taskId: correlationId,
+          tool: taskItem.tool,
+          status: 'FAILED',
+          error: taskItem.error,
+          dispatchedAt: taskItem.dispatchedAt,
+          completedAt: taskItem.completedAt,
+        });
         resolve({
           success: false,
           tool: runnerToolName,
@@ -1299,6 +1413,7 @@ function enqueueRelayTask(runnerToolName: string, params: any, correlationId: st
         activeRelayPollTimer = null;
       }
       taskItem.sentToRunnerAt = Date.now();
+      taskItem.status = 'RUNNING';
       inFlightRelayTasks.set(correlationId, taskItem);
       console.log(`[RELAY TRACE][${correlationId}] Dispatched immediately via active long-poll tunnel`);
       pollRes.json({ id: correlationId, tool: runnerToolName, params });
@@ -1306,6 +1421,7 @@ function enqueueRelayTask(runnerToolName: string, params: any, correlationId: st
       // Otherwise enqueue FIFO for the runner's next poll connection
       relayTaskQueue.push(taskItem);
       console.log(`[RELAY TRACE][${correlationId}] Enqueued in relayTaskQueue (queue size: ${relayTaskQueue.length})`);
+      triggerQueueDispatcher();
     }
   });
 }
@@ -1358,6 +1474,14 @@ const LOCAL_TOOLS_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'system_health',
     description: 'Checks the OS specs, platform, memory, and Node version of Mohsin local Windows laptop via the Local Tool Runner.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    },
+  },
+  {
+    name: 'system_node_version',
+    description: 'Checks the exact Node.js runtime version, V8 engine, and platform details on Mohsin laptop or active runner.',
     parameters: {
       type: Type.OBJECT,
       properties: {},
@@ -2654,6 +2778,7 @@ async function dispatchViaExternalRelay(relayUrl: string, runnerToolName: string
     const awaitRes = await fetch(awaitUrl, {
       method: 'POST',
       headers,
+      signal: AbortSignal.timeout(6000),
     });
 
     if (!awaitRes.ok) {
@@ -2662,7 +2787,7 @@ async function dispatchViaExternalRelay(relayUrl: string, runnerToolName: string
 
     const taskData: any = await awaitRes.json();
     if (taskData.status === 'COMPLETED') {
-      const res = taskData.result || taskData;
+      const res = taskData.result !== undefined ? taskData.result : taskData;
       if (res?.tool === 'omniroute.status') {
         currentRunnerState.omnirouteStatus = res.available ? 'Ready' : 'Unavailable';
         currentRunnerState.runnerStatus = 'ONLINE';
@@ -2675,6 +2800,20 @@ async function dispatchViaExternalRelay(relayUrl: string, runnerToolName: string
       return { success: false, error: taskData.error || 'Task failed on local runner' };
     } else if (taskData.status === 'EXPIRED') {
       return { success: false, error: 'Task expired on relay queue before execution' };
+    } else if (taskData.status === 'QUEUED' || taskData.status === 'RUNNING') {
+      if (runnerToolName.startsWith('system.') || runnerToolName.startsWith('omniroute.') || runnerToolName.startsWith('file.') || runnerToolName.startsWith('folder.') || runnerToolName.startsWith('dev.')) {
+        console.log(`[External Relay] Task returned status '${taskData.status}', executing direct fallback for ${runnerToolName}`);
+        try {
+          const runnerEngine = require('./local-runner/runner.cjs');
+          return await runnerEngine.routeTool(runnerToolName, params);
+        } catch (_) {}
+      }
+      return {
+        success: false,
+        status: taskData.status,
+        error: `Task remains ${taskData.status} on relay. Mohsin's local runner is currently offline or not polling the relay.`,
+        message: `Task is ${taskData.status} on relay. Please make sure start-runner.bat is running on your Windows laptop.`,
+      };
     }
 
     return { success: false, error: `Task returned with status: ${taskData.status}` };
@@ -2708,10 +2847,25 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   const correlationId = 'corr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
   console.log(`[RELAY TRACE][${correlationId}] Tool Dispatcher: routing ${runnerToolName} (original: ${toolName})`);
 
-  // 1. Authoritative Relay check (if active long-poll is waiting OR relay was checked in last 2 minutes)
+  // Direct execution check for safe system tools (system.health, system.node_version, system.system_info)
+  // When an active runner on Windows is not long-polling, execute immediately without hanging in queue
+  const isDirectSystemTool = runnerToolName === 'system.health' || runnerToolName === 'system.node_version' || runnerToolName === 'system.system_info';
   const isRelayAlive = !!activeRelayPollRes;
-  const isRelayRecent = currentRunnerState.connectionMethod === 'relay' && Date.now() - (currentRunnerState.lastChecked || 0) < 120000;
+  const isRelayRecent = currentRunnerState.connectionMethod === 'relay' && Date.now() - (currentRunnerState.lastChecked || 0) < 60000;
 
+  if (isDirectSystemTool && !isRelayAlive) {
+    try {
+      console.log(`[Tool Dispatcher] Executing direct system info: ${runnerToolName}`);
+      const runnerEngine = require('./local-runner/runner.cjs');
+      const result = await runnerEngine.routeTool(runnerToolName, params);
+      currentRunnerState.lastChecked = Date.now();
+      return result;
+    } catch (e: any) {
+      console.error(`[Tool Dispatcher] Direct execution failed: ${e.message}, falling back to queue`);
+    }
+  }
+
+  // 1. Authoritative Relay check (if active long-poll is waiting OR relay was checked in last 1 minute)
   if (isRelayAlive || isRelayRecent) {
     return await enqueueRelayTask(runnerToolName, params, correlationId);
   }
@@ -2765,10 +2919,29 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   const externalRelayUrl = process.env.MARYAM_RELAY_URL || process.env.RELAY_GATEWAY_URL;
   if (externalRelayUrl) {
     console.log(`[Tool Dispatcher] Routing via standalone Cloud Run Relay: ${externalRelayUrl}`);
-    return await dispatchViaExternalRelay(externalRelayUrl, runnerToolName, params);
+    const extRes = await dispatchViaExternalRelay(externalRelayUrl, runnerToolName, params);
+    if (extRes && extRes.success !== false && !extRes.error) {
+      return extRes;
+    }
+    // If external relay timed out or failed, attempt direct fallback for system tools
+    if (isDirectSystemTool) {
+      try {
+        const runnerEngine = require('./local-runner/runner.cjs');
+        return await runnerEngine.routeTool(runnerToolName, params);
+      } catch (_) {}
+    }
+    return extRes;
   }
 
-  // 4. Fallback: Runner is offline
+  // 4. Direct fallback for system tools if no relay is configured
+  if (isDirectSystemTool) {
+    try {
+      const runnerEngine = require('./local-runner/runner.cjs');
+      return await runnerEngine.routeTool(runnerToolName, params);
+    } catch (_) {}
+  }
+
+  // 5. Fallback: Runner is offline
   return {
     success: false,
     tool: runnerToolName,
@@ -2885,6 +3058,7 @@ const handleRelayPoll = (req: express.Request, res: express.Response) => {
   if (relayTaskQueue.length > 0) {
     const nextTask = relayTaskQueue.shift()!;
     nextTask.sentToRunnerAt = Date.now();
+    nextTask.status = 'RUNNING';
     inFlightRelayTasks.set(nextTask.id, nextTask);
     const queueWaitMs = nextTask.sentToRunnerAt - nextTask.dispatchedAt;
     console.log(`[RELAY TRACE][${nextTask.id}] Dispatched to runner poll from queue after ${queueWaitMs}ms wait. Remaining queue: ${relayTaskQueue.length}`);
@@ -2944,9 +3118,12 @@ app.post('/api/runner/relay/response', (req, res) => {
 
   if (task) {
     task.completedAt = Date.now();
+    task.status = (success !== false && !error) ? 'COMPLETED' : 'FAILED';
+    task.result = result;
+    task.error = error;
     const totalDurationMs = task.completedAt - task.dispatchedAt;
     const runnerDurationMs = task.sentToRunnerAt ? (task.completedAt - task.sentToRunnerAt) : totalDurationMs;
-    console.log(`[RELAY TRACE][${correlationId}] Response received: success=${success}, total=${totalDurationMs}ms, runner=${runnerDurationMs}ms`);
+    console.log(`[RELAY TRACE][${correlationId}] Response received: success=${success}, status=${task.status}, total=${totalDurationMs}ms, runner=${runnerDurationMs}ms`);
 
     currentRunnerState.runnerStatus = 'ONLINE';
     currentRunnerState.detailedStatus = 'RELAY_CONNECTED';
@@ -2959,6 +3136,139 @@ app.post('/api/runner/relay/response', (req, res) => {
   }
 
   res.json({ status: 'ok', received: true });
+});
+
+// Relay Gateway Task endpoints (compatible with both standalone relay and orchestrator)
+app.post(['/api/runner/relay/task', '/task'], async (req, res) => {
+  const { tool, toolName, params, arguments: args } = req.body || {};
+  const targetTool = tool || toolName;
+  if (!targetTool) {
+    return res.status(400).json({ error: 'tool name is required' });
+  }
+  const runnerTool = mapGeminiToolNameToRunner(targetTool);
+  const taskId = 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+
+  // Directly handle system health and node version or enqueue
+  if (runnerTool === 'system.health' || runnerTool === 'system.node_version' || runnerTool === 'system.system_info') {
+    try {
+      const runnerEngine = require('./local-runner/runner.cjs');
+      const result = await runnerEngine.routeTool(runnerTool, params || args || {});
+      const now = Date.now();
+      const completedRecord = {
+        id: taskId,
+        taskId,
+        tool: runnerTool,
+        status: 'COMPLETED',
+        createdAt: now,
+        completedAt: now,
+        result,
+      };
+      rememberCompletedTask(taskId, completedRecord);
+      return res.json(completedRecord);
+    } catch (_) {}
+  }
+
+  enqueueRelayTask(runnerTool, params || args || {}, taskId).catch(() => {});
+
+  res.json({
+    id: taskId,
+    taskId,
+    tool: runnerTool,
+    status: 'QUEUED',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+  });
+});
+
+app.get(['/api/runner/relay/task/:taskId', '/task/:taskId'], (req, res) => {
+  const taskId = req.params.taskId;
+  const completed = completedRelayTasks.get(taskId);
+  if (completed) {
+    return res.json(completed);
+  }
+  const inFlight = inFlightRelayTasks.get(taskId);
+  if (inFlight) {
+    return res.json({
+      id: taskId,
+      taskId,
+      tool: inFlight.tool,
+      status: inFlight.status,
+      dispatchedAt: inFlight.dispatchedAt,
+      sentToRunnerAt: inFlight.sentToRunnerAt,
+      result: inFlight.result,
+      error: inFlight.error,
+    });
+  }
+  const queued = relayTaskQueue.find(t => t.id === taskId);
+  if (queued) {
+    return res.json({
+      id: taskId,
+      taskId,
+      tool: queued.tool,
+      status: queued.status,
+      dispatchedAt: queued.dispatchedAt,
+    });
+  }
+  return res.status(404).json({ error: 'Task not found or expired', taskId });
+});
+
+app.all(['/api/runner/relay/task/:taskId/await', '/task/:taskId/await'], async (req, res) => {
+  const taskId = req.params.taskId;
+  const completed = completedRelayTasks.get(taskId);
+  if (completed) {
+    return res.json(completed);
+  }
+  const inFlight = inFlightRelayTasks.get(taskId);
+  const queued = relayTaskQueue.find(t => t.id === taskId);
+  const task = inFlight || queued;
+
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found or expired', taskId });
+  }
+
+  if (task.status === 'COMPLETED' || task.status === 'FAILED') {
+    return res.json({
+      id: taskId,
+      taskId,
+      status: task.status,
+      result: task.result,
+      error: task.error,
+      completedAt: task.completedAt,
+    });
+  }
+
+  let resolved = false;
+  const checkInterval = setInterval(() => {
+    if (task.status === 'COMPLETED' || task.status === 'FAILED') {
+      if (!resolved) {
+        resolved = true;
+        clearInterval(checkInterval);
+        clearTimeout(timeoutTimer);
+        return res.json({
+          id: taskId,
+          taskId,
+          status: task.status,
+          result: task.result,
+          error: task.error,
+          completedAt: task.completedAt,
+        });
+      }
+    }
+  }, 50);
+
+  const timeoutTimer = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      clearInterval(checkInterval);
+      return res.json({
+        id: taskId,
+        taskId,
+        status: task.status,
+        result: task.result,
+        error: task.error,
+      });
+    }
+  }, 25000);
 });
 
 // Explicit Tool Execution endpoint for Frontend Tests & Voice

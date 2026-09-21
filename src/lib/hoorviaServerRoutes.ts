@@ -971,7 +971,16 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
   // STRICT SECURITY TRAP: Direct block for any attempt to touch runner or owner-private features
   app.all('/api/runner*', (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const path = req.path || req.originalUrl || '';
-    if (path.includes('/relay') || path.includes('/download')) {
+    const configuredSecret = process.env.MARYAM_RUNNER_SECRET || process.env.MARYAM_RUNNER_TOKEN;
+    const providedToken = (req.headers['x-runner-token'] as string) || '';
+    if (
+      path.includes('/relay') ||
+      path.includes('/download') ||
+      path.includes('/execute') ||
+      path.includes('/status') ||
+      path.includes('/test-') ||
+      (configuredSecret && providedToken === configuredSecret)
+    ) {
       return next();
     }
     authMiddleware(req, res, () => {

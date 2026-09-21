@@ -62,6 +62,7 @@ function authenticateMachineRequest(req: Request, res: Response, next: NextFunct
 // -------------------------------------------------------------------------
 const ALLOWED_TOOLS = new Set<string>([
   'system.health',
+  'system.node_version',
   'omniroute.status',
   'omniroute.version',
   'browser.open',
@@ -280,8 +281,8 @@ const handlePoll = (req: Request, res: Response): void => {
     return;
   }
 
-  // Mark task as DELIVERED
-  nextTask.status = 'DELIVERED';
+  // Mark task as RUNNING
+  nextTask.status = 'RUNNING';
   nextTask.deliveredAt = now;
 
   // Return payload to runner
