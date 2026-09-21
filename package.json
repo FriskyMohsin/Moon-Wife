@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit",
     "test:memory": "tsx tests/memory-pipeline.test.ts",
     "test:computer-control": "tsx tests/safe-computer-control.test.ts",
+    "test:browser-safety": "tsx tests/browser-control-safety.test.ts",
     "test:omniroute": "tsx tests/omniroute-coding-bridge.test.ts",
     "test:dev-workflow": "tsx tests/autonomous-dev-workflow.test.ts",
     "test:proactive": "tsx tests/proactive-wife-intelligence.test.ts",

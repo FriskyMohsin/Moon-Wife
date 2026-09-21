@@ -61,7 +61,9 @@ function getOrCreateToken() {
   return newToken;
 }
 
-const RUNNER_TOKEN = getOrCreateToken();
+// Prefer the already-configured relay token. The local fallback is retained
+// only for standalone development when no environment token exists.
+const RUNNER_TOKEN = process.env.MARYAM_RUNNER_TOKEN || getOrCreateToken();
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -1333,6 +1335,72 @@ let activeCdpWs = null;
 let cdpMessageId = 1;
 const cdpCallbacks = new Map();
 
+// Browser automation is deliberately limited to Mohsin's two named Chrome
+// profiles.  This is an allowlist, not a profile-creation mechanism.
+const CHROME_USER_DATA_DIR = path.join(
+  process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Local'),
+  'Google', 'Chrome', 'User Data'
+);
+const AUTHORIZED_BROWSER_ACCOUNTS = Object.freeze({
+  primary: 'friskymohsin31@gmail.com',
+  secondary: 'undefine275@gmail.com',
+});
+let managedBrowser = null; // Only a browser launched by this runner is trusted.
+const managedTabIds = new Set(); // Never act on a tab that Maryam did not create.
+let managedActiveTabId = null;
+
+function readAuthorizedChromeProfiles(localStatePath = path.join(CHROME_USER_DATA_DIR, 'Local State'), userDataDir = CHROME_USER_DATA_DIR) {
+  let infoCache = {};
+  try {
+    infoCache = JSON.parse(fs.readFileSync(localStatePath, 'utf8'))?.profile?.info_cache || {};
+  } catch (_) {
+    throw new Error('Chrome profile metadata could not be read. No profile was selected.');
+  }
+
+  const discovered = {};
+  for (const [role, email] of Object.entries(AUTHORIZED_BROWSER_ACCOUNTS)) {
+    const matches = Object.entries(infoCache).filter(([, details]) => {
+      const account = details || {};
+      return account.user_name === email || account.gaia_name === email || account.account_info?.email === email;
+    });
+    if (matches.length === 1) {
+      const [directory] = matches[0];
+      const profilePath = path.join(userDataDir, directory);
+      if (fs.existsSync(profilePath)) discovered[role] = { role, email, directory, profilePath };
+    }
+  }
+  return discovered;
+}
+
+function selectAuthorizedChromeProfile(params = {}) {
+  const request = String(params.profile || params.profileEmail || params.profileSelector || '').trim().toLowerCase();
+  const wantsSecondary = request === AUTHORIZED_BROWSER_ACCOUNTS.secondary || /secondary|second|doosr|undefine/.test(request);
+  const wantsPrimary = !request || request === AUTHORIZED_BROWSER_ACCOUNTS.primary || /primary|default|frisky/.test(request);
+  if (!wantsPrimary && !wantsSecondary) {
+    throw new Error('Browser profile denied. Only friskymohsin31@gmail.com and undefine275@gmail.com are authorized.');
+  }
+  const role = wantsSecondary ? 'secondary' : 'primary';
+  const profiles = readAuthorizedChromeProfiles();
+  if (!profiles[role]) {
+    throw new Error(`Authorized ${role} Chrome profile metadata is not available locally. Maryam will not guess or create a profile.`);
+  }
+  return profiles[role];
+}
+
+function isAnyChromeProcessRunning() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const output = execFileSync('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      "@(Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\").Count"
+    ], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    return Number(String(output).trim()) > 0;
+  } catch (_) {
+    // If process inspection is unavailable, do not risk launching into a locked profile.
+    return true;
+  }
+}
+
 function findChromeExecutable() {
   const isWin = process.platform === 'win32';
   if (!isWin) {
@@ -1359,17 +1427,6 @@ function findChromeExecutable() {
     if (fs.existsSync(p)) return p;
   }
   return 'chrome';
-}
-
-function getBrowserProfileDir() {
-  const base = process.env['LOCALAPPDATA'] || (process.env['USERPROFILE'] ? path.join(process.env['USERPROFILE'], 'AppData', 'Local') : os.tmpdir());
-  const profileDir = path.join(base, 'Google', 'Chrome', 'MaryamAutomationProfile');
-  if (!fs.existsSync(profileDir)) {
-    try {
-      fs.mkdirSync(profileDir, { recursive: true });
-    } catch (_) {}
-  }
-  return profileDir;
 }
 
 function fetchCdpJson(endpoint) {
@@ -1437,13 +1494,18 @@ async function evalInPage(expression, awaitPromise = true) {
   return result && result.result ? result.result.value : null;
 }
 
-async function connectActiveTab(optionalNavigateUrl) {
+async function connectActiveTab(optionalNavigateUrl, requestedTargetId = null) {
+  if (!managedBrowser) {
+    throw new Error('No Maryam-managed Chrome session exists. Maryam will not attach to an unknown browser.');
+  }
   const tabs = await getTabs();
-  let targetTab = tabs[0];
-  
+  let targetTab = requestedTargetId ? tabs.find(t => t.id === requestedTargetId) : null;
+  if (!targetTab && managedActiveTabId) targetTab = tabs.find(t => t.id === managedActiveTabId);
+  if (!targetTab) targetTab = tabs.find(t => managedTabIds.has(t.id));
   if (!targetTab) {
     const newTarget = await fetchCdpJson(`/json/new?${encodeURIComponent(optionalNavigateUrl || 'https://www.google.com')}`);
     targetTab = newTarget;
+    if (targetTab?.id) managedTabIds.add(targetTab.id);
   }
 
   if (!targetTab || !targetTab.webSocketDebuggerUrl) {
@@ -1477,6 +1539,7 @@ async function connectActiveTab(optionalNavigateUrl) {
         await sendCdpCommand('Page.enable');
         await sendCdpCommand('Runtime.enable');
         await sendCdpCommand('DOM.enable');
+        managedActiveTabId = targetTab.id;
         resolve(targetTab);
       } catch (err) {
         resolve(targetTab);
@@ -1547,7 +1610,8 @@ function bringChromeToForeground() {
         if (-not ([System.Management.Automation.PSTypeName]'Win32Window').Type) {
           Add-Type -TypeDefinition $code -Language CSharp
         }
-        $candidates = Get-Process -Name chrome, msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero }
+        $pid = ${managedBrowser?.pid || 0}
+        $candidates = Get-Process -Id $pid -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero }
         foreach ($p in $candidates) {
           $h = $p.MainWindowHandle
           if ([Win32Window]::IsIconic($h)) {
@@ -1568,14 +1632,25 @@ function bringChromeToForeground() {
   }
 }
 
-async function ensureBrowserOpen(initialUrl = 'https://www.google.com') {
+async function ensureBrowserOpen(initialUrl = 'https://www.google.com', params = {}) {
+  const hasExplicitProfile = Boolean(params.profile || params.profileEmail || params.profileSelector);
+  const selectedProfile = managedBrowser && !hasExplicitProfile ? managedBrowser.profile : selectAuthorizedChromeProfile(params);
+  if (managedBrowser && managedBrowser.profile.directory !== selectedProfile.directory) {
+    throw new Error('Profile switching is blocked while a Maryam-managed Chrome session is active. Close that Maryam window manually, then retry. Existing Chrome windows will never be closed automatically.');
+  }
   const isRunning = await isChromeDebuggingActive();
-  if (!isRunning) {
+  if (!managedBrowser && isRunning) {
+    throw new Error(`CDP port ${CDP_PORT} belongs to an unknown browser. Maryam will not attach to or terminate it.`);
+  }
+  if (!managedBrowser && !isRunning) {
+    if (isAnyChromeProcessRunning()) {
+      throw new Error('Chrome is already running without a Maryam-owned debugging session. Close it yourself before requesting browser automation; Maryam will not alter your existing Chrome session.');
+    }
     const execPath = findChromeExecutable();
-    const profileDir = getBrowserProfileDir();
     const chromeArgs = [
       `--remote-debugging-port=${CDP_PORT}`,
-      `--user-data-dir=${profileDir}`,
+      `--user-data-dir=${CHROME_USER_DATA_DIR}`,
+      `--profile-directory=${selectedProfile.directory}`,
       '--no-first-run',
       '--no-default-browser-check',
       '--remote-allow-origins=*',
@@ -1592,6 +1667,7 @@ async function ensureBrowserOpen(initialUrl = 'https://www.google.com') {
       windowsHide: false // Must be physically visible on desktop
     });
     browserProcess.unref();
+    managedBrowser = { pid: browserProcess.pid, profile: selectedProfile, startedAt: Date.now() };
 
     let ready = false;
     for (let i = 0; i < 20; i++) {
@@ -1602,7 +1678,8 @@ async function ensureBrowserOpen(initialUrl = 'https://www.google.com') {
       }
     }
     if (!ready) {
-      throw new Error(`Chrome was launched but CDP port ${CDP_PORT} did not respond within 10 seconds.`);
+      managedBrowser = null;
+      throw new Error(`Chrome was launched but CDP port ${CDP_PORT} did not respond within 10 seconds. Maryam did not terminate Chrome; close or inspect it manually before retrying.`);
     }
   }
 
@@ -1813,7 +1890,7 @@ async function inspectBrowserActionSecurity(actionName, params = {}, isTypeActio
 // 1. browser.open
 async function executeBrowserOpen(params = {}) {
   const url = params.url || 'https://www.google.com';
-  const tab = await ensureBrowserOpen(url);
+  const tab = await ensureBrowserOpen(url, params);
   bringChromeToForeground();
   if (params.url) {
     try {
@@ -1831,7 +1908,7 @@ async function executeBrowserOpen(params = {}) {
     url: currentUrl,
     title,
     cdpPort: CDP_PORT,
-    profile: 'MaryamAutomationProfile',
+    profile: managedBrowser?.profile?.email,
     message: 'Chrome browser window successfully opened and active on Mohsin laptop.',
     timestamp: Date.now()
   };
@@ -1844,7 +1921,7 @@ async function executeBrowserNavigate(params = {}) {
   if (!/^https?:\/\//i.test(url)) {
     url = 'https://' + url;
   }
-  await ensureBrowserOpen(url);
+  await ensureBrowserOpen(url, params);
   bringChromeToForeground();
   await sendCdpCommand('Page.navigate', { url });
   await new Promise(r => setTimeout(r, 2000));
@@ -1872,7 +1949,7 @@ async function executeBrowserSearch(params = {}) {
     searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
   }
 
-  await ensureBrowserOpen(searchUrl);
+  await ensureBrowserOpen(searchUrl, params);
   bringChromeToForeground();
   await sendCdpCommand('Page.navigate', { url: searchUrl });
   await new Promise(r => setTimeout(r, 2500));
@@ -1938,7 +2015,7 @@ async function executeBrowserSearch(params = {}) {
 
 // 4. browser.click
 async function executeBrowserClick(params = {}) {
-  await ensureBrowserOpen();
+  await ensureBrowserOpen('https://www.google.com', params);
 
   // Run deep DOM & security inspection
   const securityAlert = await inspectBrowserActionSecurity('browser.click', params, false);
@@ -2011,7 +2088,7 @@ async function executeBrowserClick(params = {}) {
 
 // 5. browser.type
 async function executeBrowserType(params = {}) {
-  await ensureBrowserOpen();
+  await ensureBrowserOpen('https://www.google.com', params);
   const text = params.text;
   if (typeof text !== 'string') throw new Error('Parameter "text" is required for browser.type.');
 
@@ -2084,7 +2161,7 @@ async function executeBrowserType(params = {}) {
 
 // 6. browser.scroll
 async function executeBrowserScroll(params = {}) {
-  await ensureBrowserOpen();
+  await ensureBrowserOpen('https://www.google.com', params);
   const direction = (params.direction || 'down').toLowerCase();
   const amount = parseInt(params.amount || '600', 10);
 
@@ -2164,8 +2241,13 @@ async function executeBrowserRefresh() {
 // 10. browser.new_tab
 async function executeBrowserNewTab(params = {}) {
   const url = params.url || 'https://www.google.com';
+  await ensureBrowserOpen(url, params);
   const newTab = await fetchCdpJson(`/json/new?${encodeURIComponent(url)}`);
-  await connectActiveTab(url);
+  if (!newTab?.id) throw new Error('Chrome did not return an owned tab target.');
+  managedTabIds.add(newTab.id);
+  await fetchCdpJson(`/json/activate/${newTab.id}`);
+  await connectActiveTab(url, newTab.id);
+  bringChromeToForeground();
   return {
     tool: 'browser.new_tab',
     status: 'created',
@@ -2178,19 +2260,17 @@ async function executeBrowserNewTab(params = {}) {
 
 // 11. browser.close_tab
 async function executeBrowserCloseTab(params = {}) {
+  await ensureBrowserOpen('https://www.google.com', params);
   const tabs = await getTabs();
   let targetId = params.targetId;
-  if (!targetId && typeof params.tabIndex === 'number' && tabs[params.tabIndex]) {
-    targetId = tabs[params.tabIndex].id;
-  }
-  if (!targetId && tabs.length > 0) {
-    targetId = tabs[0].id;
-  }
-  if (targetId) {
-    await fetchCdpJson(`/json/close/${targetId}`);
-  }
+  if (!targetId) throw new Error('browser.close_tab requires the explicit targetId of a Maryam-created tab.');
+  if (!managedTabIds.has(targetId)) throw new Error('Refusing to close a tab that Maryam did not create.');
+  if (!tabs.some(t => t.id === targetId)) throw new Error('Requested Maryam-owned tab no longer exists.');
+  await fetchCdpJson(`/json/close/${targetId}`);
+  managedTabIds.delete(targetId);
+  if (managedActiveTabId === targetId) managedActiveTabId = null;
   const remaining = await getTabs();
-  if (remaining.length > 0) {
+  if (managedTabIds.size > 0) {
     await connectActiveTab();
   }
   return {
@@ -2203,49 +2283,44 @@ async function executeBrowserCloseTab(params = {}) {
 
 // 12. browser.switch_tab
 async function executeBrowserSwitchTab(params = {}) {
+  await ensureBrowserOpen('https://www.google.com', params);
   const tabs = await getTabs();
   let targetTab = null;
 
-  if (typeof params.tabIndex === 'number' && tabs[params.tabIndex]) {
-    targetTab = tabs[params.tabIndex];
+  const ownedTabs = tabs.filter(t => managedTabIds.has(t.id));
+  if (typeof params.tabIndex === 'number' && ownedTabs[params.tabIndex]) {
+    targetTab = ownedTabs[params.tabIndex];
   } else if (params.titleMatch) {
     const q = params.titleMatch.toLowerCase();
-    targetTab = tabs.find(t => (t.title || '').toLowerCase().includes(q) || (t.url || '').toLowerCase().includes(q));
+    targetTab = ownedTabs.find(t => (t.title || '').toLowerCase().includes(q) || (t.url || '').toLowerCase().includes(q));
   } else if (params.targetId) {
-    targetTab = tabs.find(t => t.id === params.targetId);
+    targetTab = ownedTabs.find(t => t.id === params.targetId);
   }
 
-  if (!targetTab && tabs.length > 0) {
-    targetTab = tabs[0];
-  }
+  if (!targetTab) throw new Error('Refusing to switch to an unowned or unspecified tab.');
 
   if (targetTab) {
     await fetchCdpJson(`/json/activate/${targetTab.id}`);
-    await connectActiveTab();
+    await connectActiveTab(undefined, targetTab.id);
+    bringChromeToForeground();
   }
 
   return {
     tool: 'browser.switch_tab',
     status: targetTab ? 'activated' : 'not_found',
     activeTab: targetTab ? { id: targetTab.id, title: targetTab.title, url: targetTab.url } : null,
-    totalTabs: tabs.length,
+    totalTabs: ownedTabs.length,
     timestamp: Date.now()
   };
 }
 
 // 13. browser.read_page
 async function executeBrowserReadPage(params = {}) {
-  await ensureBrowserOpen();
+  await ensureBrowserOpen('https://www.google.com', params);
   const maxChars = parseInt(params.maxChars || '3500', 10);
 
   const data = await evalInPage(`
     (() => {
-      // Remove noisy non-content elements
-      const noise = document.querySelectorAll('script, style, noscript, svg, iframe, canvas, [aria-hidden="true"]');
-      noise.forEach(n => {
-        try { n.remove(); } catch (_) {}
-      });
-
       // Extract headings
       const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
         .map(h => h.innerText.trim())
@@ -4642,7 +4717,7 @@ if (require.main === module) {
     console.log(` Platform:         ${process.platform} (${isWin ? 'Windows' : 'Unix'})`);
     console.log(` Node Version:     ${process.version}`);
     console.log(` Chrome Automation:CDP Port ${CDP_PORT} (Zero-dependency native)`);
-    console.log(` Auth Token:       ${RUNNER_TOKEN}`);
+  console.log(` Auth Token:       ${process.env.MARYAM_RUNNER_TOKEN ? 'configured from environment' : 'local development fallback'}`);
     console.log(` Allowed Tools:    ${ALL_ALLOWED_TOOLS.length} Safe Binary, Browser & File Tools`);
     console.log('=================================================================');
     console.log(' Security Notice:');
@@ -4877,6 +4952,11 @@ module.exports = {
   executeSystemOpenApp,
   executeSystemListProcesses,
   executeSystemInfo,
+  // Browser profile and ownership safety helpers
+  AUTHORIZED_BROWSER_ACCOUNTS,
+  readAuthorizedChromeProfiles,
+  selectAuthorizedChromeProfile,
+  managedTabIds,
   // Browser transfer tool
   executeBrowserUploadFile,
   // Phase 4 OmniRoute Coding Bridge
