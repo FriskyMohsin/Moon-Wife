@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Maryam</title>
+    <meta name="description" content="Private personal AI companion with real Gemini voice and text interaction, persistent memory, and emotional states." />
+    <meta property="og:title" content="Maryam" />
+    <meta property="og:description" content="Private personal AI companion with real Gemini voice and text interaction, persistent memory, and emotional states." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      // Safe environment shim: ensure window.fetch is writable and cannot throw 'Cannot set property fetch of #<Window> which has only a getter'
+      (function() {
+        try {
+          var originalFetch = window.fetch ? window.fetch.bind(window) : undefined;
+          var currentFetch = originalFetch;
+          try {
+            Object.defineProperty(window, 'fetch', {
+              get: function() { return currentFetch; },
+              set: function(fn) { currentFetch = typeof fn === 'function' ? fn.bind(window) : fn; },
+              configurable: true,
+              enumerable: true
+            });
+          } catch (_) {
+            try {
+              var proto = Object.getPrototypeOf(window);
+              if (proto) {
+                Object.defineProperty(proto, 'fetch', {
+                  get: function() { return currentFetch; },
+                  set: function(fn) { currentFetch = typeof fn === 'function' ? fn.bind(window) : fn; },
+                  configurable: true,
+                  enumerable: true
+                });
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        // Global error shield against getter-only fetch property errors
+        window.addEventListener('error', function(e) {
+          if (e && e.message && e.message.indexOf('fetch') !== -1 && e.message.indexOf('getter') !== -1) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

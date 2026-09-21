@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  min-height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+@layer utilities {
+  /* Custom Keyframes for Maryam AI Companion */
+  @keyframes maryam-breathe {
+    0%, 100% {
+      transform: scale(1) translateY(0px);
+    }
+    50% {
+      transform: scale(1.018) translateY(-3px);
+    }
+  }
+
+  @keyframes maryam-aura-listening {
+    0%, 100% {
+      opacity: 0.4;
+      box-shadow: 0 0 35px rgba(225, 29, 72, 0.3), inset 0 0 20px rgba(225, 29, 72, 0.2);
+    }
+    50% {
+      opacity: 0.85;
+      box-shadow: 0 0 65px rgba(225, 29, 72, 0.65), inset 0 0 35px rgba(244, 63, 94, 0.4);
+    }
+  }
+
+  @keyframes maryam-aura-thinking {
+    0% {
+      filter: hue-rotate(0deg) brightness(1);
+    }
+    50% {
+      filter: hue-rotate(25deg) brightness(1.2);
+    }
+    100% {
+      filter: hue-rotate(0deg) brightness(1);
+    }
+  }
+
+  @keyframes maryam-speaking-lips {
+    0%, 100% {
+      transform: scaleY(1);
+    }
+    50% {
+      transform: scaleY(1.35);
+    }
+  }
+
+  @keyframes soft-pulse {
+    0%, 100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 0.8;
+    }
+  }
+
+  .animate-maryam-breathe {
+    animation: maryam-breathe 5.5s ease-in-out infinite;
+  }
+
+  .animate-maryam-listening {
+    animation: maryam-aura-listening 2.2s ease-in-out infinite;
+  }
+
+  .animate-maryam-thinking {
+    animation: maryam-aura-thinking 3s ease-in-out infinite;
+  }
+
+  .animate-soft-pulse {
+    animation: soft-pulse 3s ease-in-out infinite;
+  }
+}
+
+/* Custom scrollbar for chat & panels */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(10, 10, 15, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(225, 29, 72, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(225, 29, 72, 0.5);
+}
+

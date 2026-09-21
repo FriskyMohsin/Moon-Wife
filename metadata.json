@@ -1,0 +1,11 @@
+{
+  "name": "Maryam",
+  "description": "Private personal AI companion with real Gemini voice and text interaction, persistent memory, and emotional states.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

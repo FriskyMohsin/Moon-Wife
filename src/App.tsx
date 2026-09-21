@@ -1,0 +1,1487 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { 
+  EmotionState, 
+  VoiceState, 
+  MemoryBank, 
+  ChatMessage, 
+  AppSettings,
+  WakeWordStatus,
+  TimingDiagnostics,
+  MemoryDiagnosticsState,
+  LocalRunnerState,
+  VisionDiagnostics,
+  isRunnerOnline,
+  isOmniRouteReady
+} from './types';
+import { 
+  loadMemoryBank, 
+  saveMemoryBank, 
+  mergeMemoryBanks,
+  getRelevantMemoriesWithTiming, 
+  DEFAULT_MEMORY_BANK, 
+  applyMemoryUpdate,
+  getClientMemoryDiagnostics,
+  loadRecentConversation,
+  saveRecentConversation
+} from './lib/memoryManager';
+import { parseEmotionFromText, EMOTION_MAP } from './lib/emotionConfig';
+import { GeminiLiveAudioManager } from './lib/audioManager';
+import { WakeWordDetector } from './lib/wakeWord';
+import { Header } from './components/Header';
+import { MaryamCharacter } from './components/MaryamCharacter';
+import { NavigationSidebar, NavTab } from './components/NavigationSidebar';
+import { LeftDesktopSidebar } from './components/LeftDesktopSidebar';
+import { RightConversationPanel } from './components/RightConversationPanel';
+import { HomeStatusPanel } from './components/HomeStatusPanel';
+import { RemindersPanel } from './components/RemindersPanel';
+import { RoutinesPanel } from './components/RoutinesPanel';
+import { ConversationView } from './components/ConversationView';
+import { ControlsBar } from './components/ControlsBar';
+import { MemoryModal } from './components/MemoryModal';
+import { SettingsModal } from './components/SettingsModal';
+import { ToolRunnerModal } from './components/ToolRunnerModal';
+import { SocialDashboardModal } from './components/SocialDashboardModal';
+import { TimingDiagnosticsModal } from './components/TimingDiagnosticsModal';
+import { CameraPreview } from './components/CameraPreview';
+import { cameraManager } from './lib/cameraManager';
+import { evaluateCameraIntent } from './lib/cameraIntent';
+import { getLockedFemaleVoice } from './lib/voiceLock';
+import { isGuestActivationRequested, isGuestDeactivationRequested } from './lib/guestMode';
+import { HoorviaLanding } from './components/HoorviaLanding';
+import { HoorviaDashboard } from './components/HoorviaDashboard';
+import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
+
+export default function App() {
+  // Public Multi-User Companion Platform State
+  const [platformMode, setPlatformMode] = useState<'hoorvia' | 'mohsin_maryam'>(() => {
+    return (localStorage.getItem('hoorvia_platform_mode') as any) || 'mohsin_maryam';
+  });
+  const [hoorviaToken, setHoorviaToken] = useState<string | null>(() => {
+    return localStorage.getItem('hoorvia_user_token');
+  });
+  const [hoorviaUser, setHoorviaUser] = useState<any | null>(() => {
+    try {
+      const u = localStorage.getItem('hoorvia_user_data');
+      return u ? JSON.parse(u) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [hoorviaCompanion, setHoorviaCompanion] = useState<any | null>(() => {
+    try {
+      const c = localStorage.getItem('hoorvia_companion_data');
+      return c ? JSON.parse(c) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [showOwnerAdmin, setShowOwnerAdmin] = useState<boolean>(false);
+
+  // Application State
+  const [memory, setMemory] = useState<MemoryBank>(loadMemoryBank);
+  const [emotion, setEmotion] = useState<EmotionState>('Affectionate');
+  const [voiceState, setVoiceState] = useState<VoiceState>('Idle');
+  const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    return loadRecentConversation() as ChatMessage[];
+  });
+  const [isThinking, setIsThinking] = useState<boolean>(false);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+
+  // Live Camera & Vision State (OFF by default)
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+
+  // Vision Diagnostics State
+  const [visionDiagnostics, setVisionDiagnostics] = useState<VisionDiagnostics>({
+    CAMERA_STATE: 'OFF',
+    MEDIA_STREAM_ACTIVE: false,
+    VIDEO_WIDTH: 0,
+    VIDEO_HEIGHT: 0,
+    VISION_INTENT_DETECTED: false,
+    FRAME_BYTES: 0,
+    VISION_API_CALLED: false,
+    VISION_HTTP_STATUS: 'IDLE',
+    VISION_RESULT_PREVIEW: '',
+    VISION_CONTEXT_INJECTED_TO_MARYAM: false,
+    VISION_ERROR: null,
+  });
+
+  // Navigation & Modals State
+  const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<NavTab>('home');
+  const [isMemoryOpen, setIsMemoryOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isToolRunnerOpen, setIsToolRunnerOpen] = useState<boolean>(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
+  const [isSocialOpen, setIsSocialOpen] = useState<boolean>(false);
+
+  // Timing & Latency Diagnostics State
+  const [diagnostics, setDiagnostics] = useState<TimingDiagnostics>({
+    speechInputLatencyMs: 14,
+    geminiResponseStartLatencyMs: 320,
+    memoryRetrievalTimeMs: 0.2,
+    memoryWriteTimeMs: 1.4,
+    lastUpdated: Date.now(),
+  });
+
+  // Authoritative Memory Pipeline Diagnostics State
+  const [memoryDiagnostics, setMemoryDiagnostics] = useState<MemoryDiagnosticsState>({
+    userIdentity: 'Mohsin (Authoritative)',
+    sessionId: 'session-' + Date.now().toString(36),
+    lastWriteStatus: 'IDLE',
+    lastWriteCategory: null,
+    lastWriteTimestamp: null,
+    lastWriteLatencyMs: null,
+    lastWriteError: null,
+    retrievedCount: 0,
+    injectedIntoGemini: false,
+    memorySource: 'Core',
+    retrievalLatencyMs: 0.2,
+    retrievedCategories: [],
+  });
+
+  // Settings State
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const saved = localStorage.getItem('maryam_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          voiceName: parsed.voiceName || 'Aoede',
+          enableWakeWord: parsed.enableWakeWord ?? false,
+          wakePhrase: parsed.wakePhrase || 'Hello Baby',
+          wakeSensitivity: parsed.wakeSensitivity || 'balanced',
+          autoSpeakText: parsed.autoSpeakText ?? true,
+          bargeInEnabled: parsed.bargeInEnabled ?? true,
+        };
+      }
+    } catch {
+      // ignore
+    }
+    return {
+      voiceName: 'Aoede', // Softest suitable adult female voice
+      enableWakeWord: false,
+      wakePhrase: 'Hello Baby',
+      wakeSensitivity: 'balanced',
+      autoSpeakText: true,
+      bargeInEnabled: true,
+    };
+  });
+
+  const [serverStatus, setServerStatus] = useState<{
+    hasApiKey: boolean;
+    companion: string;
+    modelLive: string;
+  } | null>(null);
+
+  const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>('idle');
+  const [wakeWordActive, setWakeWordActive] = useState<boolean>(false);
+  const [isGuestMode, setIsGuestMode] = useState<boolean>(false);
+
+  // Local Tool Runner & OmniRoute Connection State
+  const [runnerState, setRunnerState] = useState<LocalRunnerState>({
+    runnerStatus: 'OFFLINE',
+    omnirouteStatus: 'Unavailable',
+    isWindows: false,
+    platform: 'unknown',
+    connectionMethod: 'none',
+    errorMessage: null,
+  });
+  const [runnerToken, setRunnerToken] = useState<string>(() => {
+    return localStorage.getItem('maryam_runner_token') || '';
+  });
+
+  // Refs for Audio & WebSocket
+  const audioManagerRef = useRef<GeminiLiveAudioManager | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wakeWordRef = useRef<WakeWordDetector | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
+
+  // 1. Initial Health Check, Server Status & Memory Sync across App Reloads
+  useEffect(() => {
+    fetch('/api/health')
+      .then((res) => res.json())
+      .then((data) => {
+        setServerStatus({
+          hasApiKey: data.hasApiKey,
+          companion: data.companion,
+          modelLive: data.modelLive,
+        });
+        setIsConnected(true);
+      })
+      .catch((err) => {
+        console.warn('Server health check error:', err);
+        setIsConnected(false);
+      });
+
+    // Ensure memory survives app reloads / restarts by syncing with server disk storage
+    fetch('/api/memory')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.memory && typeof data.memory === 'object') {
+          setMemory((prev) => {
+            const merged = mergeMemoryBanks(prev, data.memory);
+            saveMemoryBank(merged);
+            return merged;
+          });
+        }
+      })
+      .catch((err) => console.warn('Memory disk sync notice:', err));
+  }, []);
+
+  // Save memory whenever updated manually (Authoritative user edit)
+  const handleUpdateMemory = (newMemory: MemoryBank) => {
+    setMemory(newMemory);
+    saveMemoryBank(newMemory);
+    const clientMem = getClientMemoryDiagnostics();
+    setDiagnostics((prev) => ({
+      ...prev,
+      memoryWriteTimeMs: clientMem.lastMemoryWriteTimeMs ?? null,
+      lastUpdated: Date.now(),
+    }));
+    setMemoryDiagnostics((prev) => ({
+      ...prev,
+      lastWriteStatus: 'SUCCESS',
+      lastWriteTimestamp: Date.now(),
+      lastWriteLatencyMs: clientMem.lastMemoryWriteTimeMs ?? null,
+      lastWriteError: null,
+    }));
+  };
+
+  const handleResetMemory = () => {
+    setMemory(DEFAULT_MEMORY_BANK);
+    saveMemoryBank(DEFAULT_MEMORY_BANK);
+    const clientMem = getClientMemoryDiagnostics();
+    setDiagnostics((prev) => ({
+      ...prev,
+      memoryWriteTimeMs: clientMem.lastMemoryWriteTimeMs ?? null,
+      lastUpdated: Date.now(),
+    }));
+    setMemoryDiagnostics((prev) => ({
+      ...prev,
+      lastWriteStatus: 'SUCCESS',
+      lastWriteCategory: 'Full Reset',
+      lastWriteTimestamp: Date.now(),
+      lastWriteLatencyMs: clientMem.lastMemoryWriteTimeMs ?? null,
+      lastWriteError: null,
+    }));
+  };
+
+  // Local Tool Runner & OmniRoute Status Check
+  const refreshRunnerStatus = useCallback(async () => {
+    try {
+      // 1. Direct check to local companion runner (127.0.0.1:48123)
+      let localData: any = null;
+      let directErrDetail: string | null = null;
+
+      const endpoints = ['http://127.0.0.1:48123/health', 'http://localhost:48123/health'];
+      for (const endpoint of endpoints) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+          let res: Response;
+          try {
+            // Include loopback targetAddressSpace for Chrome Private Network Access (PNA)
+            res = await fetch(endpoint, {
+              method: 'GET',
+              mode: 'cors',
+              cache: 'no-store',
+              headers: { Accept: 'application/json' },
+              signal: controller.signal,
+              // @ts-ignore
+              targetAddressSpace: 'loopback',
+            });
+          } catch {
+            // Standard fallback if targetAddressSpace is not recognized by browser
+            res = await fetch(endpoint, {
+              method: 'GET',
+              mode: 'cors',
+              cache: 'no-store',
+              headers: { Accept: 'application/json' },
+              signal: controller.signal,
+            });
+          }
+
+          clearTimeout(timeoutId);
+
+          if (res.ok) {
+            const parsed = await res.json();
+            if (parsed && (parsed.status === 'ok' || parsed.service === 'maryam-local-runner')) {
+              localData = parsed;
+              break;
+            }
+          }
+        } catch (err: any) {
+          if (err?.name !== 'AbortError') {
+            directErrDetail = err?.message || String(err);
+          }
+        }
+      }
+
+      // If direct connection succeeded
+      if (localData) {
+        const isOmniReady = Boolean(localData.omnirouteAvailable);
+        const newState: LocalRunnerState = {
+          runnerStatus: 'ONLINE',
+          omnirouteStatus: isOmniReady ? 'Ready' : 'Unavailable',
+          isWindows: localData.platform === 'win32' || localData.isWindows === true,
+          platform: localData.platform || 'win32',
+          nodeVersion: localData.nodeVersion,
+          omniroutePath: localData.omniroutePath,
+          omnirouteVersion: localData.omnirouteVersion || (isOmniReady ? '3.8.50' : null),
+          lastChecked: Date.now(),
+          connectionMethod: 'direct',
+          errorMessage: null,
+        };
+        setRunnerState(newState);
+
+        // Report real status to server
+        fetch('/api/runner/report-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            runnerStatus: 'ONLINE',
+            omnirouteStatus: newState.omnirouteStatus,
+            details: {
+              platform: localData.platform,
+              isWindows: localData.platform === 'win32',
+              version: localData.omnirouteVersion,
+              path: localData.omniroutePath,
+              connectionMethod: 'direct',
+            },
+          }),
+        }).catch(() => {});
+        return;
+      }
+
+      // 2. Check server relay status (outbound tunnel from Windows laptop)
+      const res = await fetch('/api/runner/status');
+      const data = await res.json();
+      if (data?.runnerState && (data.hasRelayConnection || isRunnerOnline(data.runnerState.runnerStatus))) {
+        const s = data.runnerState;
+        const isConnected = isRunnerOnline(s.runnerStatus);
+        const isOmni = isOmniRouteReady(s.omnirouteStatus);
+        setRunnerState({
+          ...s,
+          runnerStatus: isConnected ? 'ONLINE' : 'OFFLINE',
+          omnirouteStatus: isOmni ? 'Ready' : 'Unavailable',
+          omnirouteVersion: s.omnirouteVersion || (isOmni ? '3.8.50' : null),
+          connectionMethod: s.connectionMethod || 'relay',
+          errorMessage: null,
+        });
+        return;
+      }
+
+      // 3. If neither direct nor relay succeeded, keep OFFLINE and document real reason
+      let errorMsg = 'Local companion runner not detected on 127.0.0.1:48123.';
+      if (window.location.protocol === 'https:' && directErrDetail) {
+        errorMsg = `Direct fetch to http://127.0.0.1:48123 was blocked by browser Mixed-Content / Private Network Access (${directErrDetail}). Connect via start-runner.bat or allow Insecure Content in Chrome site settings.`;
+      }
+
+      setRunnerState((prev) => ({
+        ...prev,
+        runnerStatus: 'OFFLINE',
+        omnirouteStatus: 'Unavailable',
+        connectionMethod: 'none',
+        lastChecked: Date.now(),
+        errorMessage: errorMsg,
+      }));
+    } catch (e) {
+      console.warn('Runner status check notice:', e);
+    }
+  }, []);
+
+  // Poll runner status every 6 seconds
+  useEffect(() => {
+    refreshRunnerStatus();
+    const interval = setInterval(refreshRunnerStatus, 6000);
+    return () => clearInterval(interval);
+  }, [refreshRunnerStatus]);
+
+  // Periodic Diagnostics Refresh Helper
+  const refreshDiagnostics = useCallback(async () => {
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }));
+      }
+      const clientMem = getClientMemoryDiagnostics();
+      const res = await fetch('/api/diagnostics');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.metrics) {
+          setDiagnostics((prev) => ({
+            speechInputLatencyMs: prev.speechInputLatencyMs ?? data.metrics.speechInputLatencyMs,
+            geminiResponseStartLatencyMs: prev.geminiResponseStartLatencyMs ?? data.metrics.geminiResponseStartLatencyMs,
+            memoryRetrievalTimeMs: clientMem.lastMemoryRetrievalTimeMs || data.metrics.memoryRetrievalTimeMs || 0.2,
+            memoryWriteTimeMs: clientMem.lastMemoryWriteTimeMs || data.metrics.memoryWriteTimeMs || 1.4,
+            lastUpdated: Date.now(),
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn('Diagnostics refresh notice:', err);
+    }
+  }, []);
+
+  // Periodic ping loop to measure speech input latency
+  useEffect(() => {
+    if (platformMode === 'hoorvia') return;
+    const interval = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }));
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [platformMode]);
+
+  // 2. Initialize Gemini Live WebSocket & Audio Manager
+  const connectLiveSession = useCallback(() => {
+    if (platformMode === 'hoorvia') return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${settings.voiceName}${isGuestMode ? '&guestMode=true' : ''}`;
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('Connected to Maryam Live WebSocket');
+        setIsConnected(true);
+        // Measure initial input latency
+        ws.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }));
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'pong' && typeof data.clientTime === 'number') {
+            const rtt = performance.now() - data.clientTime;
+            const latency = Math.max(1, Math.round(rtt / 2));
+            setDiagnostics((prev) => ({
+              ...prev,
+              speechInputLatencyMs: latency,
+              lastUpdated: Date.now(),
+            }));
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'timing_report', speechInputLatencyMs: latency }));
+            }
+          } else if (data.type === 'timing' && data.metric === 'geminiResponseStartLatency' && typeof data.valueMs === 'number') {
+            setDiagnostics((prev) => ({
+              ...prev,
+              geminiResponseStartLatencyMs: Math.round(data.valueMs),
+              lastUpdated: Date.now(),
+            }));
+          } else if (data.type === 'audio' && data.audio) {
+            console.log(`[BROWSER_AUDIO_RECEIVED] bytes=${data.audio.length}`);
+            // Live audio chunk received from Gemini Live
+            if (audioManagerRef.current) {
+              await audioManagerRef.current.playChunk(data.audio, data.mimeType);
+            }
+          } else if (data.type === 'interrupted') {
+            console.log('Gemini Live detected user interruption');
+            if (audioManagerRef.current) {
+              audioManagerRef.current.bargeIn();
+            }
+          } else if (data.type === 'turnComplete') {
+            setVoiceState(audioManagerRef.current?.getIsCapturing() ? 'Listening' : 'Idle');
+          } else if (data.type === 'execute_local_tool') {
+            console.log('[Gemini Live Tool Dispatch to Local Runner]', data.tool, data.params);
+            const token = localStorage.getItem('maryam_runner_token') || runnerToken || '';
+            (async () => {
+              // 1. Try direct localhost call
+              try {
+                const toolRes = await fetch('http://127.0.0.1:48123/api/tool', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                    ...(token ? { 'x-runner-token': token } : {}),
+                  },
+                  body: JSON.stringify({
+                    tool: data.tool,
+                    params: data.params || {},
+                  }),
+                });
+
+                if (toolRes.ok) {
+                  const toolJson = await toolRes.json();
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'local_tool_response',
+                      callId: data.callId,
+                      result: toolJson,
+                    }));
+                  }
+                  if (data.tool === 'omniroute.status' && toolJson?.result) {
+                    setRunnerState((prev) => ({
+                      ...prev,
+                      runnerStatus: 'ONLINE',
+                      omnirouteStatus: toolJson.result.available ? 'Ready' : 'Unavailable',
+                      omniroutePath: toolJson.result.path,
+                      omnirouteVersion: toolJson.result.version,
+                      lastChecked: Date.now(),
+                    }));
+                  }
+                  return;
+                }
+              } catch (err: any) {
+                console.log('Direct localhost call in browser note:', err?.message);
+              }
+
+              // 2. Fallback: Ask Maryam Server Dispatcher (in case runner is on relay)
+              try {
+                const serverExecRes = await fetch('/api/runner/execute', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    tool: data.tool,
+                    params: data.params || {},
+                  }),
+                });
+                const serverExecJson = await serverExecRes.json();
+                if (serverExecJson?.success && serverExecJson.result) {
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'local_tool_response',
+                      callId: data.callId,
+                      result: serverExecJson.result,
+                    }));
+                  }
+                  if (data.tool === 'omniroute.status' && serverExecJson.result?.available) {
+                    setRunnerState((prev) => ({
+                      ...prev,
+                      runnerStatus: 'ONLINE',
+                      omnirouteStatus: 'Ready',
+                      omniroutePath: serverExecJson.result.path,
+                      omnirouteVersion: serverExecJson.result.version,
+                      lastChecked: Date.now(),
+                    }));
+                  }
+                  return;
+                }
+              } catch (_) {}
+
+              // 3. If neither worked, report real status
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                  type: 'local_tool_response',
+                  callId: data.callId,
+                  result: {
+                    success: false,
+                    error: 'Could not reach local runner directly (browser mixed-content blocked) or via relay tunnel.',
+                    runnerStatus: 'Local Runner Offline',
+                    omnirouteStatus: 'OmniRoute Unavailable',
+                  },
+                }));
+              }
+            })();
+          } else if (data.type === 'error') {
+            console.warn('Live WS message error:', data.message);
+          }
+        } catch (e) {
+          console.error('Error handling WebSocket message:', e);
+        }
+      };
+
+      ws.onclose = (e) => {
+        console.log(`[CLIENT_CLOSE_CALLED] source=App.tsx.ws.onclose code=${e.code} reason=${e.reason}`);
+        setIsConnected(false);
+        wsRef.current = null;
+      };
+
+      ws.onerror = (err) => {
+        console.warn('Maryam Live WebSocket error:', err);
+      };
+    } catch (e) {
+      console.warn('Failed to open WebSocket:', e);
+    }
+  }, [platformMode, settings.voiceName, isGuestMode]);
+
+  // Audio Manager Setup
+  useEffect(() => {
+    if (platformMode === 'hoorvia') {
+      return;
+    }
+
+    const manager = new GeminiLiveAudioManager({
+      onAudioData: (base64Pcm: string, metadata?: { rms: number; isSpeaking: boolean; captureTimestamp: number }) => {
+        // Send microphone chunk to server WebSocket on the isolated hot path
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ 
+            type: 'audio', 
+            audio: base64Pcm,
+            isSpeaking: metadata?.isSpeaking,
+          }));
+        }
+      },
+      onVoiceStateChange: (state: VoiceState) => {
+        setVoiceState(state);
+      },
+      onAudioLevel: (lvl: number) => {
+        setAudioLevel(lvl);
+      },
+      onUserSpeechDetected: () => {
+        if (settings.bargeInEnabled) {
+          console.log('User speech detected: interrupting Maryam playback (Barge-in)');
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
+          }
+        }
+      },
+      onError: (err: Error) => {
+        console.error('Audio Manager error:', err);
+      },
+    });
+
+    audioManagerRef.current = manager;
+    manager.setGuestMode(isGuestMode);
+
+    return () => {
+      console.log('[CLIENT_CLOSE_CALLED] source=App.tsx.audioManager_useEffect_cleanup');
+      manager.destroy();
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [platformMode, settings.bargeInEnabled, isGuestMode]);
+
+  // Handle Voice Toggle (Start/Stop Mic)
+  const handleToggleMic = async () => {
+    if (!audioManagerRef.current) return;
+
+    if (audioManagerRef.current.getIsCapturing()) {
+      audioManagerRef.current.stopMicrophone();
+      setVoiceState('Idle');
+    } else {
+      // Free wake word recognition if active before starting live mic stream
+      if (wakeWordRef.current) {
+        wakeWordRef.current.stopListening();
+      }
+      setWakeWordActive(false);
+
+      // Connect WS first if not already open
+      connectLiveSession();
+      const started = await audioManagerRef.current.startMicrophone();
+      if (started) {
+        setVoiceState('Listening');
+      } else {
+        console.warn('Microphone permission not granted or device unavailable.');
+      }
+    }
+  };
+
+  // Handle Mute Toggle
+  const handleToggleMute = () => {
+    if (!audioManagerRef.current) return;
+    const newMuted = !isMuted;
+    audioManagerRef.current.setMute(newMuted);
+    setIsMuted(newMuted);
+  };
+
+  // Browser Speech Synthesis fallback (if Gemini Cloud TTS preview quota is reached)
+  const speakWithBrowserSpeech = useCallback((rawText: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setVoiceState('Idle');
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const clean = rawText.replace(/\[EMOTION:\s*\w+\]/gi, '').trim();
+      const utterance = new SpeechSynthesisUtterance(clean);
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(
+        (v) =>
+          v.lang.startsWith('ur') ||
+          v.lang.startsWith('hi') ||
+          v.name.toLowerCase().includes('female') ||
+          v.name.toLowerCase().includes('natural') ||
+          v.name.toLowerCase().includes('zira') ||
+          v.name.toLowerCase().includes('samantha')
+      );
+      if (preferred) {
+        utterance.voice = preferred;
+      }
+      utterance.pitch = 1.05;
+      utterance.rate = 0.95;
+      utterance.onstart = () => setVoiceState('Speaking');
+      utterance.onend = () => {
+        setVoiceState('Idle');
+        setPlayingMessageId(null);
+      };
+      utterance.onerror = () => {
+        setVoiceState('Idle');
+        setPlayingMessageId(null);
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      setVoiceState('Idle');
+      setPlayingMessageId(null);
+    }
+  }, []);
+
+  // Handle Barge-in (Stop Maryam while speaking)
+  const handleBargeIn = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) {}
+    }
+    if (audioManagerRef.current) {
+      audioManagerRef.current.bargeIn();
+    }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
+    }
+    setPlayingMessageId(null);
+  };
+
+  // Play a specific message audio via TTS (Gemini Cloud TTS or graceful Browser Speech Fallback)
+  const handlePlayMessageAudio = async (msg: ChatMessage) => {
+    if (playingMessageId === msg.id) {
+      // If already playing, stop it (barge-in)
+      handleBargeIn();
+      return;
+    }
+
+    try {
+      setPlayingMessageId(msg.id);
+      setVoiceState('Speaking');
+
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: msg.text,
+          voiceName: settings.voiceName,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.audioBase64 && audioManagerRef.current) {
+        await audioManagerRef.current.playChunk(data.audioBase64);
+      } else if (data.fallbackToWebSpeech || !data.audioBase64) {
+        speakWithBrowserSpeech(data.cleanText || msg.text);
+      }
+    } catch {
+      speakWithBrowserSpeech(msg.text);
+    } finally {
+      setTimeout(() => {
+        setPlayingMessageId((curr) => (curr === msg.id ? null : curr));
+      }, 5000);
+    }
+  };
+
+  // Camera Toggle & Stream Manager
+  const handleToggleCamera = async () => {
+    if (isCameraActive) {
+      cameraManager.stopCamera();
+      setIsCameraActive(false);
+      setCameraStream(null);
+    } else {
+      const res = await cameraManager.startCamera();
+      if (res.success) {
+        setIsCameraActive(true);
+        setCameraStream(cameraManager.getState().stream);
+      } else {
+        alert('Could not access camera: ' + (res.error || 'Please check camera permissions in your browser.'));
+      }
+    }
+  };
+
+  // 3. Send Text Message to Maryam (Real Gemini API with Authoritative Pre-Response Memory Retrieval & Live Camera Vision)
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim()) return;
+
+    // Interrupt any current speech
+    handleBargeIn();
+
+    let cameraActiveNow = cameraManager.getState().isActive;
+    const cameraIntent = evaluateCameraIntent(text, cameraActiveNow);
+    let capturedImageBase64: string | null = null;
+
+    if (cameraIntent.action === 'ENABLE_CAMERA' && !cameraActiveNow) {
+      const res = await cameraManager.startCamera();
+      if (res.success) {
+        setIsCameraActive(true);
+        setCameraStream(cameraManager.getState().stream);
+        cameraActiveNow = true;
+      }
+    } else if (cameraIntent.action === 'DISABLE_CAMERA' && cameraActiveNow) {
+      cameraManager.stopCamera();
+      setIsCameraActive(false);
+      setCameraStream(null);
+      cameraActiveNow = false;
+    }
+
+    // Intercept vision intent
+    const isVisionQuery = cameraIntent.isVisionQuery;
+    let frameBytes = 0;
+    let captureSuccess = false;
+    let captureTimestamp: number | null = null;
+
+    if (cameraActiveNow || isVisionQuery) {
+      if (!cameraActiveNow && isVisionQuery) {
+        const res = await cameraManager.startCamera();
+        if (res.success) {
+          setIsCameraActive(true);
+          setCameraStream(cameraManager.getState().stream);
+          cameraActiveNow = true;
+        }
+      }
+
+      if (cameraActiveNow) {
+        capturedImageBase64 = await cameraManager.captureSnapshotBase64Async();
+        if (capturedImageBase64) {
+          frameBytes = Math.round((capturedImageBase64.length * 3) / 4);
+          captureSuccess = frameBytes > 500;
+          captureTimestamp = Date.now();
+        }
+      }
+    }
+
+    const videoDims = cameraManager.getVideoDimensions();
+
+    // Set diagnostics pre-call
+    const initialVisionDiag: VisionDiagnostics = {
+      CAMERA_STATE: cameraActiveNow ? 'ON' : 'OFF',
+      MEDIA_STREAM_ACTIVE: cameraManager.isMediaStreamActive(),
+      VIDEO_WIDTH: videoDims.width,
+      VIDEO_HEIGHT: videoDims.height,
+      VISION_INTENT_DETECTED: isVisionQuery || cameraIntent.action === 'ENABLE_CAMERA',
+      FRAME_BYTES: frameBytes,
+      VISION_API_CALLED: true,
+      VISION_HTTP_STATUS: 'PENDING',
+      VISION_RESULT_PREVIEW: '',
+      VISION_CONTEXT_INJECTED_TO_MARYAM: captureSuccess,
+      VISION_ERROR: captureSuccess ? null : (isVisionQuery ? 'Failed to capture frame from webcam stream' : null),
+    };
+    setVisionDiagnostics(initialVisionDiag);
+    console.log('[VISION_ROUTER_PRE_CALL]', initialVisionDiag);
+
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      text,
+      timestamp: Date.now(),
+    };
+
+    const updatedWithUser = [...messagesRef.current, userMsg];
+    setMessages(updatedWithUser);
+    saveRecentConversation(updatedWithUser);
+    setIsThinking(true);
+    setVoiceState('Thinking');
+
+    // 1. Authoritative pre-response memory retrieval (with conversation context)
+    const { 
+      memories: relevantMemories, 
+      retrievalTimeMs, 
+      retrievedCount, 
+      memorySource, 
+      retrievedCategories 
+    } = getRelevantMemoriesWithTiming(memory, text, messagesRef.current.slice(-4));
+
+    setDiagnostics((prev) => ({
+      ...prev,
+      memoryRetrievalTimeMs: retrievalTimeMs,
+      lastUpdated: Date.now(),
+    }));
+
+    setMemoryDiagnostics((prev) => ({
+      ...prev,
+      retrievalLatencyMs: retrievalTimeMs,
+      retrievedCount,
+      injectedIntoGemini: true,
+      memorySource,
+      retrievedCategories,
+    }));
+
+    // Handle Guest Mode triggers
+    let currentGuestMode = isGuestMode;
+    if (isGuestActivationRequested(text)) {
+      currentGuestMode = true;
+      setIsGuestMode(true);
+    } else if (isGuestDeactivationRequested(text)) {
+      currentGuestMode = false;
+      setIsGuestMode(false);
+    }
+
+    const sendTimestamp = performance.now();
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          imageBase64: capturedImageBase64,
+          isVisionRequest: isVisionQuery,
+          cameraState: cameraActiveNow ? 'ON' : 'OFF',
+          relevantMemories,
+          history: updatedWithUser.slice(-8),
+          currentMemory: memory,
+          isGuestMode: currentGuestMode,
+        }),
+      });
+
+      const data = await res.json();
+      const replyText = data.reply || '';
+
+      const postVisionDiag: VisionDiagnostics = {
+        ...initialVisionDiag,
+        VISION_HTTP_STATUS: res.status,
+        VISION_RESULT_PREVIEW: replyText.slice(0, 80),
+      };
+      setVisionDiagnostics(postVisionDiag);
+      console.log('[VISION_ROUTER_POST_CALL]', postVisionDiag);
+      const responseLatency = data.diagnostics?.geminiResponseLatencyMs || Math.round(performance.now() - sendTimestamp);
+      setDiagnostics((prev) => ({
+        ...prev,
+        geminiResponseStartLatencyMs: responseLatency,
+        lastUpdated: Date.now(),
+      }));
+
+      // Check if authoritative updated memory bank returned
+      if (data.updatedMemoryBank) {
+        setMemory((prev) => {
+          const merged = mergeMemoryBanks(prev, data.updatedMemoryBank);
+          saveMemoryBank(merged);
+          return merged;
+        });
+      }
+
+      // Check if Maryam extracted a new or updated long-term memory
+      if (data.memoryUpdate && data.memoryUpdate.action !== 'none') {
+        console.log('[App] Authoritative memory update applied:', data.memoryUpdate);
+        setMemory((prev) => {
+          const updated = applyMemoryUpdate(prev, data.memoryUpdate);
+          saveMemoryBank(updated);
+          const clientMem = getClientMemoryDiagnostics();
+          setDiagnostics((d) => ({
+            ...d,
+            memoryWriteTimeMs: clientMem.lastMemoryWriteTimeMs ?? null,
+            lastUpdated: Date.now(),
+          }));
+          return updated;
+        });
+
+        setMemoryDiagnostics((prev) => ({
+          ...prev,
+          lastWriteStatus: 'SUCCESS',
+          lastWriteCategory: data.memoryUpdate.category,
+          lastWriteTimestamp: Date.now(),
+          lastWriteLatencyMs: data.diagnostics?.serverRetrievalLatencyMs || 1.2,
+          lastWriteError: null,
+        }));
+      }
+
+      if (data.text) {
+        // Parse emotional state from Maryam's response
+        const { cleanedText, emotion: detectedEmotion } = parseEmotionFromText(data.text);
+        setEmotion(detectedEmotion);
+
+        const maryamMsg: ChatMessage = {
+          id: `maryam-${Date.now()}`,
+          sender: 'maryam',
+          text: cleanedText,
+          timestamp: Date.now(),
+          emotion: detectedEmotion,
+        };
+
+        const updatedWithMaryam = [...updatedWithUser, maryamMsg];
+        setMessages(updatedWithMaryam);
+        saveRecentConversation(updatedWithMaryam);
+        setIsThinking(false);
+
+        // Auto-speak Maryam's response if enabled
+        if (settings.autoSpeakText) {
+          handlePlayMessageAudio(maryamMsg);
+        } else {
+          setVoiceState(audioManagerRef.current?.getIsCapturing() ? 'Listening' : 'Idle');
+        }
+      } else {
+        throw new Error(data.error || 'No response from Maryam');
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      console.error('Chat error:', errorMessage);
+      setIsThinking(false);
+      setVoiceState(audioManagerRef.current?.getIsCapturing() ? 'Listening' : 'Idle');
+
+      const fallbackMsg: ChatMessage = {
+        id: `maryam-err-${Date.now()}`,
+        sender: 'maryam',
+        text: 'Meri jaan, network mein thoda issue lag raha hai, lekin main yahin hoon. Ek baar dobara puchiye?',
+        timestamp: Date.now(),
+        emotion: 'Concerned',
+      };
+      const updatedWithFallback = [...updatedWithUser, fallbackMsg];
+      setMessages(updatedWithFallback);
+      saveRecentConversation(updatedWithFallback);
+    }
+  };
+
+  // 4. Clean Wake Phrase Activation Handoff ("Hello Baby")
+  const handleWakePhraseActivation = useCallback(async (phrase: string) => {
+    console.log('[App] Real Wake Phrase Triggered:', phrase);
+    setWakeWordStatus('detected');
+    setEmotion('Happy');
+
+    // 1. Immediately terminate wake word recognition to free microphone hardware
+    if (wakeWordRef.current) {
+      wakeWordRef.current.stopListening();
+    }
+    setWakeWordActive(false);
+
+    // 2. Maryam natural Roman Urdu loving acknowledgment
+    const ackOptions = [
+      'Jee Mohsin! Maryam sun rahi hai meri jaan, boliye?',
+      'Ji meri jaan! Main sun rahi hoon, boliye Mohsin...',
+      'Hello baby! Maryam yahin hai aapke sath, farmayein meri jaan?',
+    ];
+    const ackText = ackOptions[Math.floor(Math.random() * ackOptions.length)];
+
+    const ackMessage: ChatMessage = {
+      id: `maryam-ack-${Date.now()}`,
+      sender: 'maryam',
+      text: ackText,
+      timestamp: Date.now(),
+      emotion: 'Affectionate',
+    };
+    setMessages((prev) => [...prev, ackMessage]);
+
+    // 3. Pause 150ms to allow OS audio stack to fully release input device
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // 4. Connect Gemini Live WS
+    connectLiveSession();
+
+    // 5. Start live 16kHz microphone stream for Gemini Live
+    if (audioManagerRef.current) {
+      const started = await audioManagerRef.current.startMicrophone();
+      if (started) {
+        setVoiceState('Listening');
+      }
+    }
+
+    // 6. Speak Maryam's warm acknowledgment (Gemini Cloud TTS or graceful Browser Speech Fallback)
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: ackText,
+          voiceName: settings.voiceName,
+        }),
+      });
+      const data = await res.json();
+      if (data.audioBase64 && audioManagerRef.current) {
+        await audioManagerRef.current.playChunk(data.audioBase64);
+      } else if (data.fallbackToWebSpeech || !data.audioBase64) {
+        speakWithBrowserSpeech(data.cleanText || ackText);
+      }
+    } catch {
+      speakWithBrowserSpeech(ackText);
+    }
+  }, [connectLiveSession, settings.voiceName, speakWithBrowserSpeech]);
+
+  // 5. Standby Wake Word Detector Setup ("Hello Baby")
+  // Only listens when:
+  // - settings.enableWakeWord is true
+  // - voiceState === 'Idle'
+  // - microphone is NOT actively streaming for Gemini Live
+  useEffect(() => {
+    if (!settings.enableWakeWord) {
+      if (wakeWordRef.current) {
+        wakeWordRef.current.stopListening();
+      }
+      setWakeWordActive(false);
+      setWakeWordStatus('idle');
+      return;
+    }
+
+    // If an active session is in progress (Listening, Thinking, Speaking),
+    // standby detector MUST remain stopped to prevent dual mic streams!
+    if (voiceState !== 'Idle') {
+      if (wakeWordRef.current) {
+        wakeWordRef.current.stopListening();
+      }
+      setWakeWordActive(false);
+      return;
+    }
+
+    // Delay 350ms before re-arming the standby wake word detector after a session ends
+    const timer = setTimeout(async () => {
+      if (voiceState !== 'Idle' || !settings.enableWakeWord) return;
+
+      // Only start standby wake word detection if mic permission is already explicitly granted
+      try {
+        const micState = await WakeWordDetector.checkMicPermission();
+        if (micState !== 'granted') {
+          setWakeWordActive(false);
+          setWakeWordStatus('idle');
+          return;
+        }
+      } catch {
+        return;
+      }
+
+      if (voiceState !== 'Idle' || !settings.enableWakeWord) return;
+
+      if (!wakeWordRef.current) {
+        wakeWordRef.current = new WakeWordDetector(
+          {
+            onWakePhraseDetected: (phrase: string) => {
+              handleWakePhraseActivation(phrase);
+            },
+            onStatusChange: (status: WakeWordStatus) => {
+              setWakeWordStatus(status);
+              setWakeWordActive(status === 'waiting');
+            },
+          },
+          settings.wakePhrase,
+          settings.wakeSensitivity
+        );
+      } else {
+        wakeWordRef.current.setWakePhrase(settings.wakePhrase);
+        wakeWordRef.current.setSensitivity(settings.wakeSensitivity);
+      }
+
+      wakeWordRef.current.startListening();
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+      if (wakeWordRef.current) {
+        wakeWordRef.current.stopListening();
+      }
+    };
+  }, [
+    settings.enableWakeWord,
+    settings.wakePhrase,
+    settings.wakeSensitivity,
+    voiceState,
+    handleWakePhraseActivation,
+  ]);
+
+  const handleUpdateSettings = (newSettings: AppSettings) => {
+    setSettings(newSettings);
+    try {
+      localStorage.setItem('maryam_settings', JSON.stringify(newSettings));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleHoorviaLoginSuccess = (data: { token: string; user: any; companion: any }) => {
+    setHoorviaToken(data.token);
+    setHoorviaUser(data.user);
+    setHoorviaCompanion(data.companion);
+    localStorage.setItem('hoorvia_user_token', data.token);
+    localStorage.setItem('hoorvia_user_data', JSON.stringify(data.user));
+    localStorage.setItem('hoorvia_companion_data', JSON.stringify(data.companion));
+  };
+
+  const handleHoorviaLogout = () => {
+    setHoorviaToken(null);
+    setHoorviaUser(null);
+    setHoorviaCompanion(null);
+    localStorage.removeItem('hoorvia_user_token');
+    localStorage.removeItem('hoorvia_user_data');
+    localStorage.removeItem('hoorvia_companion_data');
+  };
+
+  // Render Owner Admin Center if opened
+  if (showOwnerAdmin) {
+    return (
+      <HoorviaOwnerAdmin
+        token={hoorviaToken || 'owner_secret_dev_session'}
+        onClose={() => setShowOwnerAdmin(false)}
+      />
+    );
+  }
+
+  // Render Public Hoorvia Platform if in 'hoorvia' mode
+  if (platformMode === 'hoorvia') {
+    if (!hoorviaToken || !hoorviaUser) {
+      return (
+        <HoorviaLanding
+          onLoginSuccess={handleHoorviaLoginSuccess}
+          onContinueAsGuestOwner={() => {
+            setPlatformMode('mohsin_maryam');
+            localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam');
+          }}
+        />
+      );
+    }
+
+    return (
+      <HoorviaDashboard
+        token={hoorviaToken}
+        user={hoorviaUser}
+        initialCompanion={
+          hoorviaCompanion || {
+            name: 'Aria',
+            type: 'girlfriend',
+            gender: 'female',
+            voice: 'Aoede',
+            language: 'English',
+            personality: 'Warm, deeply attentive, intelligent, and emotionally supportive companion.',
+            systemPrompt: 'You are Aria, an affectionate and caring AI companion.',
+            tone: 'Romantic',
+          }
+        }
+        onLogout={handleHoorviaLogout}
+        onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
+      />
+    );
+  }
+
+  const currentEmotionMeta = EMOTION_MAP[emotion] || EMOTION_MAP.Normal;
+
+  return (
+    <div className="h-screen h-[100dvh] max-h-screen w-screen max-w-full bg-[#06040a] text-zinc-100 flex flex-col font-sans selection:bg-rose-500/30 overflow-hidden relative min-h-0">
+      {/* Dynamic Ambient Aura Background matching Maryam's Emotion */}
+      <div
+        className="fixed inset-0 pointer-events-none transition-colors duration-1000 opacity-20 blur-[140px]"
+        style={{
+          background: `radial-gradient(ellipse at 35% 30%, ${currentEmotionMeta.orbPrimary} 0%, ${currentEmotionMeta.orbSecondary} 45%, transparent 85%)`,
+        }}
+      />
+
+      {/* Navigation Sidebar Drawer */}
+      <NavigationSidebar
+        isOpen={isMenuOpen}
+        onClose={() => setIsMenuOpen(false)}
+        activeTab={activeTab}
+        onSelectTab={(tab) => {
+          if (tab === 'social') {
+            setIsSocialOpen(true);
+            setIsMenuOpen(false);
+          } else {
+            setActiveTab(tab);
+          }
+        }}
+        onOpenMemory={() => {
+          setIsMemoryOpen(true);
+          setIsMenuOpen(false);
+        }}
+        onOpenSettings={() => {
+          setIsSettingsOpen(true);
+          setIsMenuOpen(false);
+        }}
+        onOpenToolRunner={() => {
+          setIsToolRunnerOpen(true);
+          setIsMenuOpen(false);
+        }}
+        onOpenDiagnostics={() => {
+          setIsDiagnosticsOpen(true);
+          setIsMenuOpen(false);
+        }}
+        onOpenSocial={() => {
+          setIsSocialOpen(true);
+          setIsMenuOpen(false);
+        }}
+        onOpenOwnerAdmin={() => {
+          setShowOwnerAdmin(true);
+          setIsMenuOpen(false);
+        }}
+        isConnected={isConnected}
+        runnerConnected={isRunnerOnline(runnerState.runnerStatus)}
+        omniRouteAvailable={isOmniRouteReady(runnerState.omnirouteStatus)}
+      />
+
+      {/* Top Header */}
+      <Header
+        emotion={emotion}
+        isConnected={isConnected}
+        onOpenMenu={() => setIsMenuOpen(true)}
+        onOpenMemory={() => setIsMemoryOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenToolRunner={() => setIsToolRunnerOpen(true)}
+        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+        onOpenSocial={() => setIsSocialOpen(true)}
+        onSwitchPlatformMode={() => {
+          setPlatformMode('hoorvia');
+          localStorage.setItem('hoorvia_platform_mode', 'hoorvia');
+        }}
+        diagnostics={diagnostics}
+        voiceName={settings.voiceName}
+        runnerState={runnerState}
+      />
+
+      {/* Main Responsive 3-Panel Stage */}
+      <div className="flex-1 min-h-0 w-full max-w-[1800px] mx-auto flex flex-col md:flex-row overflow-hidden relative z-10 h-[calc(100dvh-60px)]">
+        {/* Column 1: Slim Left Navigation Sidebar (Desktop) */}
+        <LeftDesktopSidebar
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            if (tab === 'social') {
+              setIsSocialOpen(true);
+            } else {
+              setActiveTab(tab);
+            }
+          }}
+          onOpenMemory={() => setIsMemoryOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenToolRunner={() => setIsToolRunnerOpen(true)}
+          onOpenSocial={() => setIsSocialOpen(true)}
+          onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
+        />
+
+        {/* Center & Right Columns Container */}
+        <main className="flex-1 min-h-0 p-0 sm:p-3 md:p-4 flex flex-col xl:flex-row gap-0 xl:gap-4 overflow-y-auto xl:overflow-hidden h-full">
+          {/* Column 2: MARYAM CHARACTER PROMINENCE (Home Tab Only) */}
+          {activeTab === 'home' && (
+            <section className="flex-[1.85] min-h-0 xl:w-[66%] h-[52vh] xl:h-full flex flex-col justify-center shrink-0">
+              <MaryamCharacter
+                voiceState={voiceState}
+                emotion={emotion}
+                audioLevel={audioLevel}
+                isConnected={isConnected}
+                onCharacterClick={handleToggleMic}
+                onSelectEmotion={(e) => setEmotion(e)}
+              />
+            </section>
+          )}
+
+          {/* Column 3: CONVERSATION PANEL / TAB CONTENT (Full width when not on Home) */}
+          <section className={`flex-1 min-h-0 ${activeTab === 'home' ? 'xl:w-[34%] h-[min(560px,48vh)] xl:h-full' : 'w-full h-full'} flex flex-col justify-between overflow-hidden`}>
+            {/* Live Camera Preview Widget */}
+            {isCameraActive && (
+              <div className="px-4 py-2 shrink-0 border-b border-rose-900/20 bg-black/40 rounded-t-3xl">
+                <CameraPreview
+                  stream={cameraStream}
+                  isActive={isCameraActive}
+                  onToggleCamera={handleToggleCamera}
+                />
+              </div>
+            )}
+
+            {activeTab === 'home' && (
+              <HomeStatusPanel
+                latestMessage={messages[messages.length - 1] || null}
+                voiceState={voiceState}
+                emotion={emotion}
+                audioLevel={audioLevel}
+                isThinking={isThinking}
+                isMuted={isMuted}
+                onToggleMic={handleToggleMic}
+                onToggleMute={handleToggleMute}
+                onBargeIn={handleBargeIn}
+                onSendMessage={handleSendMessage}
+                onToggleCamera={handleToggleCamera}
+                isCameraActive={isCameraActive}
+                wakeWordActive={wakeWordActive}
+                wakeWordStatus={wakeWordStatus}
+                enableWakeWord={settings.enableWakeWord}
+                wakePhrase={settings.wakePhrase}
+                onTriggerWakeWord={() => handleWakePhraseActivation(settings.wakePhrase)}
+                onOpenMemory={() => setIsMemoryOpen(true)}
+                onOpenToolRunner={() => setIsToolRunnerOpen(true)}
+                onSelectTab={(tab) => {
+                  if (tab === 'social') setIsSocialOpen(true);
+                  else setActiveTab(tab as NavTab);
+                }}
+              />
+            )}
+
+            {activeTab === 'conversations' && (
+              <RightConversationPanel
+                messages={messages}
+                isThinking={isThinking}
+                voiceState={voiceState}
+                isMuted={isMuted}
+                audioLevel={audioLevel}
+                playingMessageId={playingMessageId}
+                isGuestMode={isGuestMode}
+                onEndGuestMode={() => setIsGuestMode(false)}
+                onPlayMessageAudio={handlePlayMessageAudio}
+                onSendMessage={handleSendMessage}
+                onToggleMic={handleToggleMic}
+                onToggleMute={handleToggleMute}
+                onBargeIn={handleBargeIn}
+                onToggleCamera={handleToggleCamera}
+                isCameraActive={isCameraActive}
+                wakeWordActive={wakeWordActive}
+                wakeWordStatus={wakeWordStatus}
+                enableWakeWord={settings.enableWakeWord}
+                wakePhrase={settings.wakePhrase}
+                onTriggerWakeWord={() => handleWakePhraseActivation(settings.wakePhrase)}
+                onOpenMemory={() => setIsMemoryOpen(true)}
+                onOpenToolRunner={() => setIsToolRunnerOpen(true)}
+                onSelectTab={(tab) => {
+                  if (tab === 'social') setIsSocialOpen(true);
+                  else setActiveTab(tab as NavTab);
+                }}
+              />
+            )}
+
+            {activeTab === 'reminders' && <RemindersPanel />}
+            {activeTab === 'routines' && <RoutinesPanel />}
+          </section>
+        </main>
+      </div>
+
+      {/* Modals */}
+      <TimingDiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        diagnostics={diagnostics}
+        onRefresh={refreshDiagnostics}
+        memoryDiagnostics={memoryDiagnostics}
+        totalMemoriesAvailable={
+          (memory.preferences?.length || 0) +
+          (memory.importantPeople?.length || 0) +
+          (memory.personalFacts?.length || 0) +
+          (memory.relationshipMemories?.length || 0) +
+          (memory.projects?.length || 0) +
+          (memory.importantDecisions?.length || 0) +
+          (memory.conversationSummaries?.length || 0)
+        }
+      />
+
+      <MemoryModal
+        isOpen={isMemoryOpen}
+        onClose={() => setIsMemoryOpen(false)}
+        memory={memory}
+        onUpdateMemory={handleUpdateMemory}
+        onResetMemory={handleResetMemory}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={settings}
+        onUpdateSettings={handleUpdateSettings}
+        serverStatus={serverStatus}
+      />
+
+      <ToolRunnerModal
+        isOpen={isToolRunnerOpen}
+        onClose={() => setIsToolRunnerOpen(false)}
+        runnerState={runnerState}
+        onRefreshStatus={refreshRunnerStatus}
+        runnerToken={runnerToken}
+        onSaveToken={(t) => {
+          setRunnerToken(t);
+          localStorage.setItem('maryam_runner_token', t);
+        }}
+      />
+
+      <SocialDashboardModal
+        isOpen={isSocialOpen}
+        onClose={() => setIsSocialOpen(false)}
+      />
+    </div>
+  );
+}

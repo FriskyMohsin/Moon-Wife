@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build and distribution
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment & Secrets (NEVER COMMIT)
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cert
+*.pfx
+*.p12
+
+# Local runner tokens and profiles
+local-runner/.runner-token
+.runner-token
+*.runner-token
+MaryamAutomationProfile/
+ChromeProfile/
+
+# Deployment & container config backups containing environment secrets
+containers-*.json
+deployment-*.json
+public-endpoint.json
+
+# Runtime state, private memory, and platform credentials
+data/
+workspace/
+
+# Workspace test runs and ephemeral sandboxes
+workspace/coding_test_*
+workspace/test_sandbox_*
+
+# Logs and PID files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+*.seed
+*.pid.lock
+
+# Operating System & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Claude Code worktrees & cache
+.claude/worktrees/
+.claude/scheduled_tasks.json

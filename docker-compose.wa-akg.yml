@@ -1,0 +1,57 @@
+# docker-compose.wa-akg.yml
+# Production 24/7 WA-AKG WhatsApp Gateway Service with MySQL Persistence
+# Repository: https://github.com/mrifqidaffaaditya/WA-AKG
+
+version: '3.8'
+
+services:
+  wa_mysql:
+    image: mysql:8.0
+    container_name: maryam-wa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${WA_MYSQL_ROOT_PASSWORD:-maryam_root_secure_pass_99}
+      MYSQL_DATABASE: wa_akg
+      MYSQL_USER: wa_user
+      MYSQL_PASSWORD: ${WA_MYSQL_PASSWORD:-maryam_wa_secure_pass_99}
+    volumes:
+      - wa_akg_mysql_data:/var/lib/mysql
+    networks:
+      - maryam-internal-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wa_akg_gateway:
+    image: ghcr.io/mrifqidaffaaditya/wa-akg:latest
+    container_name: maryam-wa-akg-gateway
+    restart: unless-stopped
+    depends_on:
+      wa_mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: mysql://wa_user:${WA_MYSQL_PASSWORD:-maryam_wa_secure_pass_99}@wa_mysql:3306/wa_akg
+      AUTH_SECRET: ${WA_AUTH_SECRET:-generate_random_jwt_secret_32_chars_long}
+      API_KEY: ${WHATSAPP_GATEWAY_API_KEY:-mohsin_wa_gateway_key_998877}
+      WEBHOOK_URL: ${MARYAM_BACKEND_URL:-http://maryam-app:3000}/api/whatsapp/webhook
+      WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:-maryam_webhook_secret_key_1122}
+    ports:
+      - "8080:8080"
+    volumes:
+      - wa_akg_sessions:/app/sessions
+    networks:
+      - maryam-internal-net
+
+volumes:
+  wa_akg_mysql_data:
+    driver: local
+  wa_akg_sessions:
+    driver: local
+
+networks:
+  maryam-internal-net:
+    driver: bridge

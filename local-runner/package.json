@@ -1,0 +1,11 @@
+{
+  "name": "maryam-local-runner",
+  "version": "1.0.0",
+  "description": "Local companion service for Maryam on Windows",
+  "main": "runner.cjs",
+  "scripts": {
+    "start": "node runner.cjs"
+  },
+  "author": "Mohsin",
+  "license": "MIT"
+}
