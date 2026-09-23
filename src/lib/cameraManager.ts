@@ -15,6 +15,7 @@ export interface CameraState {
   permissionStatus: 'granted' | 'denied' | 'prompt' | 'unknown';
   error: string | null;
   stream: MediaStream | null;
+  facingMode: 'user' | 'environment';
 }
 
 export type CameraStateListener = (state: CameraState) => void;
@@ -33,6 +34,7 @@ export class CameraManager {
     permissionStatus: 'unknown',
     error: null,
     stream: null,
+    facingMode: 'user',
   };
 
   private listeners: Set<CameraStateListener> = new Set();
@@ -99,7 +101,7 @@ export class CameraManager {
   /**
    * Requests camera permission and starts live video feed
    */
-  public async startCamera(): Promise<{ success: boolean; error?: string }> {
+  public async startCamera(facingMode: 'user' | 'environment' = this.state.facingMode): Promise<{ success: boolean; error?: string }> {
     if (this.isRequestingCamera) {
       return { success: false, error: 'Camera request already in progress' };
     }
@@ -125,7 +127,7 @@ export class CameraManager {
         video: {
           width: { ideal: 640 },
           height: { ideal: 480 },
-          facingMode: 'user',
+          facingMode: { ideal: facingMode },
         },
         audio: false, // Audio handled separately by audioManager
       });
@@ -148,6 +150,7 @@ export class CameraManager {
         permissionStatus: 'granted',
         error: null,
         stream,
+        facingMode,
       };
 
       // Listen for stream track ending
@@ -175,6 +178,7 @@ export class CameraManager {
       }
 
       this.state = {
+        ...this.state,
         isActive: false,
         hasPermission: false,
         permissionStatus: permStatus,
@@ -186,6 +190,12 @@ export class CameraManager {
     } finally {
       this.isRequestingCamera = false;
     }
+  }
+
+  public async switchCamera(): Promise<{ success: boolean; error?: string }> {
+    const nextFacingMode = this.state.facingMode === 'user' ? 'environment' : 'user';
+    this.stopCamera('Switching camera');
+    return this.startCamera(nextFacingMode);
   }
 
   /**

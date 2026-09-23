@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { VoiceState, WakeWordStatus } from '../types';
-import { Mic, MicOff, Send, Hand, Sparkles, Radio, Camera, CameraOff, Heart } from 'lucide-react';
+import { Mic, MicOff, Send, Hand, Sparkles, Radio, Camera, CameraOff, Heart, ImagePlus, Video, VideoOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface ControlsBarProps {
@@ -18,6 +18,9 @@ interface ControlsBarProps {
   onTriggerWakeWord: () => void;
   isCameraActive?: boolean;
   onToggleCamera?: () => void;
+  onSelectImage?: (file: File) => void;
+  isVideoCallActive?: boolean;
+  onToggleVideoCall?: () => void;
   onToggleQuickActions?: () => void;
   isQuickActionsOpen?: boolean;
 }
@@ -37,6 +40,9 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
   onTriggerWakeWord,
   isCameraActive = false,
   onToggleCamera,
+  onSelectImage,
+  isVideoCallActive = false,
+  onToggleVideoCall,
   onToggleQuickActions,
   isQuickActionsOpen = false,
 }) => {
@@ -132,6 +138,38 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
             title={isCameraActive ? 'Turn camera OFF' : 'Turn camera ON for Maryam vision'}
           >
             {isCameraActive ? <Camera className="w-5 h-5" /> : <CameraOff className="w-5 h-5" />}
+          </motion.button>
+        )}
+        {onSelectImage && (
+          <label className="p-3.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-rose-900/40 cursor-pointer" title="Attach an image for vision analysis">
+            <ImagePlus className="w-5 h-5" />
+            <input
+              id="input-vision-image"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) onSelectImage(file);
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
+        )}
+        {onToggleVideoCall && (
+          <motion.button
+            id="btn-toggle-video-call"
+            type="button"
+            onClick={onToggleVideoCall}
+            whileTap={{ scale: 0.92 }}
+            className={`p-3.5 rounded-full flex items-center justify-center transition-all border ${
+              isVideoCallActive
+                ? 'bg-rose-600 text-white border-rose-400 ring-2 ring-rose-400 animate-pulse'
+                : 'bg-zinc-900 hover:bg-zinc-800 text-rose-300 border-rose-900/40'
+            }`}
+            title={isVideoCallActive ? 'End Video Call' : 'Start Video Call'}
+          >
+            {isVideoCallActive ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
           </motion.button>
         )}
 

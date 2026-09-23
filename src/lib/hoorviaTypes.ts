@@ -419,6 +419,14 @@ export interface LiveSessionDiagnostics {
   sessionStarted?: boolean;
   audioInputFrames?: number;
   audioOutputFrames?: number;
+  clientAudioChunksSent?: number;
+  clientAudioBytesSent?: number;
+  geminiInputChunks?: number;
+  geminiInputBytes?: number;
+  geminiOutputAudioChunks?: number;
+  geminiOutputAudioBytes?: number;
+  browserAudioChunksForwarded?: number;
+  browserAudioBytesForwarded?: number;
   durationSeconds?: number;
   disconnectReason?: string;
   httpOrApiStatus?: string | number;

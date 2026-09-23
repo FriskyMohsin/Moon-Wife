@@ -20,6 +20,9 @@ interface RightConversationPanelProps {
   onToggleMute: () => void;
   onBargeIn: () => void;
   onToggleCamera: () => void;
+  onSelectImage?: (file: File) => void;
+  isVideoCallActive?: boolean;
+  onToggleVideoCall?: () => void;
   isCameraActive: boolean;
   wakeWordActive: boolean;
   wakeWordStatus: WakeWordStatus;
@@ -46,6 +49,9 @@ export const RightConversationPanel: React.FC<RightConversationPanelProps> = ({
   onToggleMute,
   onBargeIn,
   onToggleCamera,
+  onSelectImage,
+  isVideoCallActive,
+  onToggleVideoCall,
   isCameraActive,
   wakeWordActive,
   wakeWordStatus,
@@ -243,6 +249,9 @@ export const RightConversationPanel: React.FC<RightConversationPanelProps> = ({
         onTriggerWakeWord={onTriggerWakeWord}
         isCameraActive={isCameraActive}
         onToggleCamera={onToggleCamera}
+        onSelectImage={onSelectImage}
+        isVideoCallActive={isVideoCallActive}
+        onToggleVideoCall={onToggleVideoCall}
         onToggleQuickActions={() => setIsQuickActionsOpen((prev) => !prev)}
         isQuickActionsOpen={isQuickActionsOpen}
       />

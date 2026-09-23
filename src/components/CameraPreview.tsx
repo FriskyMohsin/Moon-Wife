@@ -9,9 +9,10 @@ interface CameraPreviewProps {
   onToggleCamera?: () => void;
   onStopCamera?: () => void;
   onCaptureVision?: () => void;
+  onSwitchCamera?: () => void;
 }
 
-export const CameraPreview: React.FC<CameraPreviewProps> = ({ stream, isActive, onToggleCamera, onStopCamera, onCaptureVision }) => {
+export const CameraPreview: React.FC<CameraPreviewProps> = ({ stream, isActive, onToggleCamera, onStopCamera, onCaptureVision, onSwitchCamera }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraState, setCameraState] = useState<CameraState>(() =>
     CameraManager.getInstance().getState()
@@ -65,6 +66,11 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({ stream, isActive, 
                 Snap
               </button>
             )}
+            {onSwitchCamera && (
+              <button onClick={onSwitchCamera} className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-300" title="Switch front/back camera">
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               id="btn-close-camera-preview"
               onClick={onStopCamera || onToggleCamera}
@@ -100,7 +106,7 @@ export const CameraPreview: React.FC<CameraPreviewProps> = ({ stream, isActive, 
                 className="w-full h-full object-cover transform -scale-x-100"
               />
               <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-[9px] text-zinc-300 border border-white/10">
-                Facing Camera
+                {cameraState.facingMode === 'user' ? 'Front Camera' : 'Back Camera'}
               </div>
             </>
           )}

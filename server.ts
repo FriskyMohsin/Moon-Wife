@@ -54,6 +54,8 @@ import {
 } from './src/lib/proactiveManager';
 import { registerHoorviaRoutes } from './src/lib/hoorviaServerRoutes';
 import { registerHoorviaLiveWs, handleHoorviaLiveWsConnection } from './src/lib/hoorviaLiveWs';
+import { normalizeVisionImageMimeType } from './src/lib/visionPayload';
+import { createLiveVisionInput } from './src/lib/liveVisionProtocol';
 import { validateSessionToken } from './src/lib/hoorviaPlatform';
 import {
   getAllTasks,
@@ -4204,7 +4206,7 @@ async function generateMaryamResponse(
 // Chat endpoint (Real Gemini text conversation + Intelligent Core Memory Integration + Camera Vision)
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, imageBase64, relevantMemories = [], history = [], currentMemory = null } = req.body;
+    const { message, imageBase64, imageMimeType, relevantMemories = [], history = [], currentMemory = null } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
     }
@@ -4248,6 +4250,7 @@ app.post('/api/chat', async (req, res) => {
       systemInstruction += `\n\n[SUBTLE BACKGROUND CONTEXT / AUTHORITATIVE CORE MEMORIES]:\n${effectiveMemories.map((m: string) => `• ${m}`).join('\n')}\n(Note: This is natural background familiarity you already share with Mohsin. Speak with your warm, loving, and playful personality; answer naturally and never sound like a robotic search engine.)`;
     }
 
+    const visionMimeType = normalizeVisionImageMimeType(imageMimeType);
     const isVisionReq = req.body.isVisionRequest || !!imageBase64;
 
     if (imageBase64) {
@@ -4309,7 +4312,7 @@ Note: Weave this in naturally if appropriate in your Roman Urdu response, but NE
     if (imageBase64) {
       userParts.push({
         inlineData: {
-          mimeType: 'image/jpeg',
+          mimeType: visionMimeType,
           data: imageBase64,
         },
       });
@@ -4483,6 +4486,11 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   let isSessionActive = false;
   let speechTurnStart = 0;
   let waitingForModelTurn = false;
+  let visionFramesBackendReceived = 0;
+  let visionFramesGeminiSent = 0;
+  let visionFramesGeminiRejected = 0;
+  let lastVisionFrameTimestamp: number | null = null;
+  let lastVisionError: string | null = null;
 
   const requestedVoice = url.searchParams.get('voice');
   const { voiceName: lockedVoice, diagnostics: voiceDiag } = getLockedFemaleVoice(requestedVoice);
@@ -4660,19 +4668,19 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
           },
         });
         console.log(`[GEMINI_AUDIO_SENT] bytes=${msg.audio.length}`);
-      } else if (msg.type === 'image' && (msg.image || msg.imageBase64) && isSessionActive && session) {
-        // Forward camera JPEG snapshot to Gemini Live for realtime vision
+      } else if ((msg.type === 'image' || msg.type === 'video_frame') && (msg.image || msg.imageBase64) && isSessionActive && session) {
+        // Sampled visual context for this same owner Live session; never persisted.
         const imgData = msg.image || msg.imageBase64;
+        visionFramesBackendReceived++;
+        lastVisionFrameTimestamp = Date.now();
         try {
-          session.sendRealtimeInput([
-            {
-              mimeType: 'image/jpeg',
-              data: imgData,
-            },
-          ]);
-          console.log('[Gemini Live] Camera snapshot frame sent to session successfully');
+          session.sendRealtimeInput(createLiveVisionInput(imgData, msg.mimeType || 'image/jpeg'));
+          visionFramesGeminiSent++;
+          console.log(`[LIVE_VISION_BACKEND] model=gemini-3.8-live received=${visionFramesBackendReceived} geminiSent=${visionFramesGeminiSent} rejected=${visionFramesGeminiRejected} base64Chars=${imgData.length} timestamp=${lastVisionFrameTimestamp}`);
         } catch (vErr) {
-          console.warn('[Gemini Live] Vision frame send error:', vErr);
+          visionFramesGeminiRejected++;
+          lastVisionError = vErr instanceof Error ? vErr.message : String(vErr);
+          console.warn(`[LIVE_VISION_BACKEND_ERROR] rejected=${visionFramesGeminiRejected} error=${lastVisionError}`);
         }
       } else if (msg.type === 'interrupt') {
         // User interrupted playback / barge-in

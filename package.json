@@ -16,7 +16,10 @@
     "test:omniroute": "tsx tests/omniroute-coding-bridge.test.ts",
     "test:dev-workflow": "tsx tests/autonomous-dev-workflow.test.ts",
     "test:proactive": "tsx tests/proactive-wife-intelligence.test.ts",
-    "test:all": "tsx tests/memory-pipeline.test.ts && tsx tests/safe-computer-control.test.ts && tsx tests/omniroute-coding-bridge.test.ts && tsx tests/autonomous-dev-workflow.test.ts && tsx tests/proactive-wife-intelligence.test.ts"
+    "test:live-audio": "tsx tests/live-audio-protocol.test.ts",
+    "test:vision": "tsx tests/vision-payload.test.ts",
+    "test:live-vision": "tsx tests/live-vision-protocol.test.ts",
+    "test:all": "tsx tests/live-audio-protocol.test.ts && tsx tests/vision-payload.test.ts && tsx tests/live-vision-protocol.test.ts && tsx tests/memory-pipeline.test.ts && tsx tests/safe-computer-control.test.ts && tsx tests/omniroute-coding-bridge.test.ts && tsx tests/autonomous-dev-workflow.test.ts && tsx tests/proactive-wife-intelligence.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

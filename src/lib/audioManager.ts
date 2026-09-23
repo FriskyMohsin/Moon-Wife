@@ -51,6 +51,9 @@ export class GeminiLiveAudioManager {
   }
 
   private micFrameCount: number = 0;
+  private micBytes: number = 0;
+  private audioBuffersScheduled: number = 0;
+  private audioBuffersPlayed: number = 0;
   private isRequestingMic: boolean = false;
 
   public async startMicrophone(): Promise<boolean> {
@@ -106,6 +109,9 @@ export class GeminiLiveAudioManager {
 
       this.speechThresholdCounter = 0;
       this.micFrameCount = 0;
+      this.micBytes = 0;
+      this.audioBuffersScheduled = 0;
+      this.audioBuffersPlayed = 0;
 
       this.processor.onaudioprocess = (e) => {
         if (this.isMuted) return;
@@ -189,8 +195,9 @@ export class GeminiLiveAudioManager {
         const base64 = btoa(binary);
 
         this.micFrameCount++;
+        this.micBytes += pcm16.byteLength;
         if (this.micFrameCount === 1 || this.micFrameCount % 50 === 0) {
-          console.log(`[MIC_PCM_SENT] bytes=${base64.length}`);
+          console.log(`[LIVE_MIC_DIAGNOSTICS] micChunks=${this.micFrameCount} micBytes=${this.micBytes}`);
         }
 
         this.callbacks.onAudioData(base64, {
@@ -279,7 +286,7 @@ export class GeminiLiveAudioManager {
         console.warn('Failed to resume output AudioContext:', err);
       }
     }
-    console.log(`[AUDIO_CONTEXT_STATE] state=${this.outputAudioCtx.state}`);
+    console.log(`[AUDIO_CONTEXT_STATE] state=${this.outputAudioCtx.state} sampleRate=${this.outputAudioCtx.sampleRate}`);
     return this.outputAudioCtx;
   }
 
@@ -337,6 +344,8 @@ export class GeminiLiveAudioManager {
       const startTime = Math.max(currentTime, this.nextPlayTime);
       sourceNode.start(startTime);
       console.log('[AUDIO_SOURCE_STARTED]');
+      this.audioBuffersScheduled++;
+      console.log(`[LIVE_PLAYBACK_DIAGNOSTICS] audioBuffersScheduled=${this.audioBuffersScheduled} contextState=${ctx.state} sampleRate=${ctx.sampleRate}`);
       this.nextPlayTime = startTime + audioBuffer.duration;
 
       this.activeSources.push(sourceNode);
@@ -346,6 +355,8 @@ export class GeminiLiveAudioManager {
       sourceNode.onended = () => {
         console.log('[AUDIO_PLAYBACK_ENDED]');
         console.log('[AUDIO_SOURCE_ENDED]');
+        this.audioBuffersPlayed++;
+        console.log(`[LIVE_PLAYBACK_DIAGNOSTICS] audioBuffersPlayed=${this.audioBuffersPlayed}`);
         const idx = this.activeSources.indexOf(sourceNode);
         if (idx !== -1) {
           this.activeSources.splice(idx, 1);

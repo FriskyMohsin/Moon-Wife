@@ -134,6 +134,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
 
   const audioManagerRef = useRef<GeminiLiveAudioManager | null>(null);
+  const browserAudioChunksReceivedRef = useRef(0);
+  const browserAudioBytesReceivedRef = useRef(0);
   const liveWsRef = useRef<WebSocket | null>(null);
   const durationTimerRef = useRef<any>(null);
 
@@ -557,6 +559,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
     audioManager.setGuestMode(true);
     audioManagerRef.current = audioManager;
+    browserAudioChunksReceivedRef.current = 0;
+    browserAudioBytesReceivedRef.current = 0;
 
     try {
       const micStarted = await audioManager.startMicrophone();
@@ -615,8 +619,10 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             }, 1000);
           } else if (data.type === 'audio' && data.audio) {
             setLiveState('SPEAKING');
-            console.log(`[BROWSER_AUDIO_RECEIVED] bytes=${data.audio.length}`);
-            console.log(`[AUDIO_CHUNK_RECEIVED_BROWSER] bytes=${data.audio.length}`);
+            const padding = data.audio.endsWith('==') ? 2 : data.audio.endsWith('=') ? 1 : 0;
+            browserAudioChunksReceivedRef.current++;
+            browserAudioBytesReceivedRef.current += Math.max(0, Math.floor((data.audio.length * 3) / 4) - padding);
+            console.log(`[PUBLIC_LIVE_BROWSER_AUDIO] chunks=${browserAudioChunksReceivedRef.current} bytes=${browserAudioBytesReceivedRef.current} mime=${data.mimeType || 'audio/pcm;rate=24000'}`);
             audioManagerRef.current?.playChunk(data.audio, data.mimeType);
           } else if (data.type === 'interrupted') {
             audioManagerRef.current?.bargeIn();

@@ -49,6 +49,7 @@ import { TimingDiagnosticsModal } from './components/TimingDiagnosticsModal';
 import { CameraPreview } from './components/CameraPreview';
 import { cameraManager } from './lib/cameraManager';
 import { evaluateCameraIntent } from './lib/cameraIntent';
+import { LIVE_VISION_FRAME_INTERVAL_MS, shouldSampleLiveVision } from './lib/liveVisionProtocol';
 import { getLockedFemaleVoice } from './lib/voiceLock';
 import { isGuestActivationRequested, isGuestDeactivationRequested } from './lib/guestMode';
 import { HoorviaLanding } from './components/HoorviaLanding';
@@ -107,6 +108,8 @@ export default function App() {
   // Live Camera & Vision State (OFF by default)
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [isVideoCallActive, setIsVideoCallActive] = useState(false);
+  const [visionImage, setVisionImage] = useState<{ base64: string; mimeType: string; source: 'camera' | 'upload'; preview: string } | null>(null);
 
   // Vision Diagnostics State
   const [visionDiagnostics, setVisionDiagnostics] = useState<VisionDiagnostics>({
@@ -211,6 +214,15 @@ export default function App() {
   // Refs for Audio & WebSocket
   const audioManagerRef = useRef<GeminiLiveAudioManager | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const videoFrameSamplerRef = useRef<number | null>(null);
+  const videoFrameInFlightRef = useRef(false);
+  const liveVisionDiagnosticsRef = useRef({
+    cameraFramesCaptured: 0,
+    cameraFrameBytesLast: 0,
+    visionFramesFrontendSent: 0,
+    lastVisionFrameTimestamp: 0,
+    lastVisionError: '' as string | null,
+  });
   const wakeWordRef = useRef<WakeWordDetector | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
@@ -408,6 +420,7 @@ export default function App() {
     } catch (e) {
       console.warn('Runner status check notice:', e);
     }
+    videoFrameInFlightRef.current = false;
   }, []);
 
   // Poll runner status every 6 seconds
@@ -812,6 +825,105 @@ export default function App() {
     }
   };
 
+  const setVisionImageFromFile = async (file: File) => {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      alert('Please select a JPG, PNG, or WebP image.');
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('Could not read the selected image.'));
+      reader.readAsDataURL(file);
+    });
+    setVisionImage({ base64: dataUrl.split(',', 2)[1], mimeType: file.type, source: 'upload', preview: dataUrl });
+  };
+
+  const handleCaptureVision = async () => {
+    const base64 = await cameraManager.captureSnapshotBase64Async();
+    if (!base64) {
+      alert('Camera preview is not ready. Please wait a moment and try again.');
+      return;
+    }
+    setVisionImage({ base64, mimeType: 'image/jpeg', source: 'camera', preview: `data:image/jpeg;base64,${base64}` });
+  };
+
+  const handleSwitchCamera = async () => {
+    const result = await cameraManager.switchCamera();
+    if (result.success) {
+      setIsCameraActive(true);
+      setCameraStream(cameraManager.getState().stream);
+    } else {
+      alert('Could not switch camera: ' + (result.error || 'Camera is unavailable.'));
+    }
+  };
+
+  const stopVideoCall = useCallback(() => {
+    if (videoFrameSamplerRef.current !== null) {
+      window.clearInterval(videoFrameSamplerRef.current);
+      videoFrameSamplerRef.current = null;
+    }
+    setIsVideoCallActive(false);
+    cameraManager.stopCamera('Video call ended');
+    setIsCameraActive(false);
+    setCameraStream(null);
+  }, []);
+
+  const startVideoCall = async () => {
+    if (isVideoCallActive) return;
+    const cameraResult = await cameraManager.startCamera();
+    if (!cameraResult.success) {
+      alert('Could not start video call camera: ' + (cameraResult.error || 'Camera unavailable.'));
+      return;
+    }
+    setIsCameraActive(true);
+    setCameraStream(cameraManager.getState().stream);
+    connectLiveSession();
+    const micStarted = await audioManagerRef.current?.startMicrophone();
+    if (!micStarted) {
+      stopVideoCall();
+      alert('Microphone permission is required for a Video Call.');
+      return;
+    }
+    setVoiceState('Listening');
+    setIsVideoCallActive(true);
+    liveVisionDiagnosticsRef.current = {
+      cameraFramesCaptured: 0,
+      cameraFrameBytesLast: 0,
+      visionFramesFrontendSent: 0,
+      lastVisionFrameTimestamp: 0,
+      lastVisionError: null,
+    };
+    const sendVisualFrame = async () => {
+      const ws = wsRef.current;
+      if (!ws || !shouldSampleLiveVision(true, ws.readyState, WebSocket.OPEN)) return;
+      if (videoFrameInFlightRef.current) return;
+      videoFrameInFlightRef.current = true;
+      try {
+        const dimensions = cameraManager.getVideoDimensions();
+        const frame = await cameraManager.captureSnapshotBase64Async();
+        if (frame && wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+          const byteLength = Math.max(0, Math.floor((frame.length * 3) / 4) - (frame.endsWith('==') ? 2 : frame.endsWith('=') ? 1 : 0));
+          liveVisionDiagnosticsRef.current.cameraFramesCaptured++;
+          liveVisionDiagnosticsRef.current.cameraFrameBytesLast = byteLength;
+          liveVisionDiagnosticsRef.current.visionFramesFrontendSent++;
+          liveVisionDiagnosticsRef.current.lastVisionFrameTimestamp = Date.now();
+          ws.send(JSON.stringify({ type: 'video_frame', imageBase64: frame, mimeType: 'image/jpeg' }));
+          console.log(`[LIVE_VISION_FRONTEND] stream=${cameraManager.isMediaStreamActive()} width=${dimensions.width} height=${dimensions.height} captured=${liveVisionDiagnosticsRef.current.cameraFramesCaptured} bytes=${byteLength} sent=${liveVisionDiagnosticsRef.current.visionFramesFrontendSent} ws=${ws.readyState} timestamp=${liveVisionDiagnosticsRef.current.lastVisionFrameTimestamp}`);
+        } else if (!frame) {
+          liveVisionDiagnosticsRef.current.lastVisionError = 'Camera frame capture returned no JPEG data';
+          console.warn(`[LIVE_VISION_FRONTEND_ERROR] ${liveVisionDiagnosticsRef.current.lastVisionError}`);
+        }
+      } finally {
+        videoFrameInFlightRef.current = false;
+      }
+    };
+    void sendVisualFrame();
+    videoFrameSamplerRef.current = window.setInterval(() => void sendVisualFrame(), LIVE_VISION_FRAME_INTERVAL_MS);
+  };
+
+  useEffect(() => () => stopVideoCall(), [stopVideoCall]);
+
   // 3. Send Text Message to Maryam (Real Gemini API with Authoritative Pre-Response Memory Retrieval & Live Camera Vision)
   const handleSendMessage = async (text: string) => {
     if (!text.trim()) return;
@@ -819,49 +931,15 @@ export default function App() {
     // Interrupt any current speech
     handleBargeIn();
 
-    let cameraActiveNow = cameraManager.getState().isActive;
+    const cameraActiveNow = cameraManager.getState().isActive;
     const cameraIntent = evaluateCameraIntent(text, cameraActiveNow);
-    let capturedImageBase64: string | null = null;
-
-    if (cameraIntent.action === 'ENABLE_CAMERA' && !cameraActiveNow) {
-      const res = await cameraManager.startCamera();
-      if (res.success) {
-        setIsCameraActive(true);
-        setCameraStream(cameraManager.getState().stream);
-        cameraActiveNow = true;
-      }
-    } else if (cameraIntent.action === 'DISABLE_CAMERA' && cameraActiveNow) {
-      cameraManager.stopCamera();
-      setIsCameraActive(false);
-      setCameraStream(null);
-      cameraActiveNow = false;
-    }
-
-    // Intercept vision intent
-    const isVisionQuery = cameraIntent.isVisionQuery;
-    let frameBytes = 0;
-    let captureSuccess = false;
-    let captureTimestamp: number | null = null;
-
-    if (cameraActiveNow || isVisionQuery) {
-      if (!cameraActiveNow && isVisionQuery) {
-        const res = await cameraManager.startCamera();
-        if (res.success) {
-          setIsCameraActive(true);
-          setCameraStream(cameraManager.getState().stream);
-          cameraActiveNow = true;
-        }
-      }
-
-      if (cameraActiveNow) {
-        capturedImageBase64 = await cameraManager.captureSnapshotBase64Async();
-        if (capturedImageBase64) {
-          frameBytes = Math.round((capturedImageBase64.length * 3) / 4);
-          captureSuccess = frameBytes > 500;
-          captureTimestamp = Date.now();
-        }
-      }
-    }
+    // A frame is transmitted only after an explicit Snap or image-selection action.
+    const capturedImageBase64 = visionImage?.base64 || null;
+    const capturedImageMimeType = visionImage?.mimeType || null;
+    const frameBytes = capturedImageBase64 ? Math.round((capturedImageBase64.length * 3) / 4) : 0;
+    const captureSuccess = frameBytes > 500;
+    const captureTimestamp = captureSuccess ? Date.now() : null;
+    const isVisionQuery = !!visionImage || cameraIntent.isVisionQuery;
 
     const videoDims = cameraManager.getVideoDimensions();
 
@@ -938,6 +1016,7 @@ export default function App() {
         body: JSON.stringify({
           message: text,
           imageBase64: capturedImageBase64,
+          imageMimeType: capturedImageMimeType,
           isVisionRequest: isVisionQuery,
           cameraState: cameraActiveNow ? 'ON' : 'OFF',
           relevantMemories,
@@ -948,6 +1027,12 @@ export default function App() {
       });
 
       const data = await res.json();
+      if (visionImage?.source === 'camera') {
+        cameraManager.stopCamera('Snapshot submitted for vision analysis');
+        setIsCameraActive(false);
+        setCameraStream(null);
+      }
+      setVisionImage(null);
       const replyText = data.reply || '';
 
       const postVisionDiag: VisionDiagnostics = {
@@ -1386,7 +1471,16 @@ export default function App() {
                   stream={cameraStream}
                   isActive={isCameraActive}
                   onToggleCamera={handleToggleCamera}
+                  onCaptureVision={handleCaptureVision}
+                  onSwitchCamera={handleSwitchCamera}
                 />
+              </div>
+            )}
+            {visionImage && (
+              <div className="mx-4 mt-2 flex items-center gap-3 rounded-xl border border-rose-500/40 bg-zinc-900 p-2 text-xs text-zinc-200">
+                <img src={visionImage.preview} alt="Selected for vision analysis" className="h-14 w-14 rounded object-cover" />
+                <span className="flex-1">Image ready for your next question. It is sent once, only when you press Send.</span>
+                <button type="button" onClick={() => setVisionImage(null)} className="rounded bg-zinc-800 px-2 py-1 text-zinc-300">Remove</button>
               </div>
             )}
 
@@ -1434,6 +1528,9 @@ export default function App() {
                 onToggleMute={handleToggleMute}
                 onBargeIn={handleBargeIn}
                 onToggleCamera={handleToggleCamera}
+                onSelectImage={setVisionImageFromFile}
+                isVideoCallActive={isVideoCallActive}
+                onToggleVideoCall={() => isVideoCallActive ? stopVideoCall() : void startVideoCall()}
                 isCameraActive={isCameraActive}
                 wakeWordActive={wakeWordActive}
                 wakeWordStatus={wakeWordStatus}

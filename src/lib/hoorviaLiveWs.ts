@@ -18,6 +18,11 @@ import {
   sanitizeErrorMessageForPublicUser,
 } from './hoorviaPlatform';
 import { ApiAuditLog } from './hoorviaTypes';
+import {
+  createRealtimeAudioInput,
+  decodedBase64ByteLength,
+  extractModelAudioChunks,
+} from './liveAudioProtocol';
 
 export function registerHoorviaLiveWs(server: HttpServer) {
   // Legacy hook maintained for compatibility if needed
@@ -163,6 +168,14 @@ export async function handleHoorviaLiveWsConnection(
   const sessionStartTime = Date.now();
   let audioInputFrames = 0;
   let audioOutputFrames = 0;
+  let clientAudioChunksSent = 0;
+  let clientAudioBytesSent = 0;
+  let geminiInputChunks = 0;
+  let geminiInputBytes = 0;
+  let geminiOutputAudioChunks = 0;
+  let geminiOutputAudioBytes = 0;
+  let browserAudioChunksForwarded = 0;
+  let browserAudioBytesForwarded = 0;
   let connectRetries = 0;
   let connectionError: any = null;
   const earlyMessageQueue: any[] = [];
@@ -197,41 +210,33 @@ export async function handleHoorviaLiveWsConnection(
       if (msg.type === 'realtime_input' && msg.mediaChunks && liveSession) {
         audioInputFrames++;
         for (const chunk of msg.mediaChunks) {
-          console.log(`[SERVER_MIC_PCM_RECEIVED] bytes=${chunk.data?.length || 0}`);
+          const byteLength = decodedBase64ByteLength(chunk.data || '');
+          clientAudioChunksSent++;
+          clientAudioBytesSent += byteLength;
+          console.log(`[PUBLIC_LIVE_CLIENT_AUDIO] chunks=${clientAudioChunksSent} bytes=${clientAudioBytesSent}`);
           try {
-            liveSession.sendRealtimeInput([
-              { mimeType: chunk.mimeType || 'audio/pcm;rate=16000', data: chunk.data },
-            ]);
-            console.log(`[GEMINI_AUDIO_SENT] bytes=${chunk.data?.length || 0}`);
-          } catch {
-            try {
-              liveSession.sendRealtimeInput({
-                audio: {
-                  data: chunk.data,
-                  mimeType: chunk.mimeType || 'audio/pcm;rate=16000',
-                },
-              });
-              console.log(`[GEMINI_AUDIO_SENT] bytes=${chunk.data?.length || 0}`);
-            } catch (e) {
-              console.warn('[Hoorvia Live WS] Realtime input send error:', e);
-            }
+            // Match Maryam's proven SDK contract. A bare array has no `audio`
+            // property, so the SDK can serialize an empty realtime-input frame.
+            liveSession.sendRealtimeInput(createRealtimeAudioInput(chunk.data, chunk.mimeType));
+            geminiInputChunks++;
+            geminiInputBytes += byteLength;
+            console.log(`[PUBLIC_LIVE_GEMINI_INPUT] chunks=${geminiInputChunks} bytes=${geminiInputBytes}`);
+          } catch (e) {
+            console.warn('[Hoorvia Live WS] Realtime input send error:', e);
           }
         }
       } else if (msg.type === 'audio' && msg.audio && liveSession) {
         audioInputFrames++;
-        console.log(`[SERVER_MIC_PCM_RECEIVED] bytes=${msg.audio.length}`);
+        const byteLength = decodedBase64ByteLength(msg.audio);
+        clientAudioChunksSent++;
+        clientAudioBytesSent += byteLength;
         try {
-          liveSession.sendRealtimeInput([{ mimeType: 'audio/pcm;rate=16000', data: msg.audio }]);
-          console.log(`[GEMINI_AUDIO_SENT] bytes=${msg.audio.length}`);
-        } catch {
-          try {
-            liveSession.sendRealtimeInput({
-              audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
-            });
-            console.log(`[GEMINI_AUDIO_SENT] bytes=${msg.audio.length}`);
-          } catch (e) {
-            console.warn('[Hoorvia Live WS] Audio chunk send error:', e);
-          }
+          liveSession.sendRealtimeInput(createRealtimeAudioInput(msg.audio));
+          geminiInputChunks++;
+          geminiInputBytes += byteLength;
+          console.log(`[PUBLIC_LIVE_GEMINI_INPUT] chunks=${geminiInputChunks} bytes=${geminiInputBytes}`);
+        } catch (e) {
+          console.warn('[Hoorvia Live WS] Audio chunk send error:', e);
         }
       } else if (msg.type === 'interrupt' || msg.type === 'interrupted') {
         console.log('[Hoorvia Live WS] User barge-in interrupt received');
@@ -286,6 +291,14 @@ export async function handleHoorviaLiveWsConnection(
           sessionStarted: true,
           audioInputFrames,
           audioOutputFrames,
+          clientAudioChunksSent,
+          clientAudioBytesSent,
+          geminiInputChunks,
+          geminiInputBytes,
+          geminiOutputAudioChunks,
+          geminiOutputAudioBytes,
+          browserAudioChunksForwarded,
+          browserAudioBytesForwarded,
           durationSeconds,
           finalResult: 'SUCCESS',
           disconnectReason: `Client Session Ended (code ${code})`,
@@ -339,21 +352,17 @@ export async function handleHoorviaLiveWsConnection(
                 console.log('[GEMINI_MODEL_TURN_RECEIVED]');
               }
 
-              // Check modelTurn parts for inline audio data
-              if (message.serverContent?.modelTurn?.parts) {
-                for (const part of message.serverContent.modelTurn.parts) {
-                  if (part.inlineData?.data) {
-                    const audio = part.inlineData.data;
-                    const mimeType = part.inlineData.mimeType || 'audio/pcm;rate=24000';
-                    audioOutputFrames++;
-                    console.log(`[GEMINI_AUDIO_RECEIVED] mime=${mimeType} bytes=${audio.length}`);
-                    console.log(`[AUDIO_CHUNK_FROM_GOOGLE] bytes=${audio.length}`);
-                    clientWs.send(JSON.stringify({ type: 'audio', audio, mimeType }));
-                    console.log(`[SERVER_AUDIO_FORWARDED] bytes=${audio.length}`);
-                    console.log(`[AUDIO_CHUNK_FORWARDED] bytes=${audio.length}`);
-                  }
+                // Gemini Live audio is raw 24kHz PCM in modelTurn inlineData.
+                for (const { data: audio, mimeType } of extractModelAudioChunks(message)) {
+                  const byteLength = decodedBase64ByteLength(audio);
+                  audioOutputFrames++;
+                  geminiOutputAudioChunks++;
+                  geminiOutputAudioBytes += byteLength;
+                  clientWs.send(JSON.stringify({ type: 'audio', audio, mimeType }));
+                  browserAudioChunksForwarded++;
+                  browserAudioBytesForwarded += byteLength;
+                  console.log(`[PUBLIC_LIVE_OUTPUT] geminiChunks=${geminiOutputAudioChunks} geminiBytes=${geminiOutputAudioBytes} browserChunks=${browserAudioChunksForwarded} browserBytes=${browserAudioBytesForwarded} mime=${mimeType}`);
                 }
-              }
 
               // Interruption detection
               if (message.serverContent?.interrupted) {
@@ -486,25 +495,21 @@ export async function handleHoorviaLiveWsConnection(
     if (msg?.type === 'audio' && msg.audio && liveSession) {
       audioInputFrames++;
       try {
-        liveSession.sendRealtimeInput([{ mimeType: 'audio/pcm;rate=16000', data: msg.audio }]);
-      } catch {
-        try {
-          liveSession.sendRealtimeInput({
-            audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
-          });
-        } catch {
-          // ignore
-        }
+        liveSession.sendRealtimeInput(createRealtimeAudioInput(msg.audio));
+        geminiInputChunks++;
+        geminiInputBytes += decodedBase64ByteLength(msg.audio);
+      } catch (err) {
+        console.warn('[Hoorvia Live WS] Buffered audio send error:', err);
       }
     } else if (msg?.type === 'realtime_input' && msg.mediaChunks && liveSession) {
       audioInputFrames++;
       for (const chunk of msg.mediaChunks) {
         try {
-          liveSession.sendRealtimeInput([
-            { mimeType: chunk.mimeType || 'audio/pcm;rate=16000', data: chunk.data },
-          ]);
-        } catch {
-          // ignore
+          liveSession.sendRealtimeInput(createRealtimeAudioInput(chunk.data, chunk.mimeType));
+          geminiInputChunks++;
+          geminiInputBytes += decodedBase64ByteLength(chunk.data || '');
+        } catch (err) {
+          console.warn('[Hoorvia Live WS] Buffered realtime input send error:', err);
         }
       }
     }
