@@ -46,8 +46,9 @@ interface HoorviaCapabilitiesManagerProps {
   user: OwnerAdminUserView;
   token: string;
   policy: PlatformPolicy | null;
-  onClose: () => void;
+  onClose?: () => void;
   onUpdated: () => void;
+  isEmbedded?: boolean;
 }
 
 const CATEGORY_META: Record<
@@ -120,6 +121,7 @@ export const HoorviaCapabilitiesManager: React.FC<HoorviaCapabilitiesManagerProp
   policy,
   onClose,
   onUpdated,
+  isEmbedded,
 }) => {
   const [capabilities, setCapabilities] = useState<Record<UserCapabilityId, boolean>>(
     user.effectiveCapabilities || { ...DEFAULT_PLATFORM_CAPABILITIES }
@@ -380,34 +382,34 @@ export const HoorviaCapabilitiesManager: React.FC<HoorviaCapabilitiesManagerProp
   const totalEnabled = Object.values(capabilities).filter(Boolean).length;
   const totalCaps = ALL_CAPABILITY_DEFINITIONS.length;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="w-full max-w-5xl bg-zinc-950 border border-rose-900/40 rounded-2xl shadow-2xl overflow-hidden my-auto flex flex-col max-h-[92vh]">
-        {/* MODAL HEADER */}
-        <div className="p-4 sm:p-6 border-b border-zinc-800/80 bg-zinc-900/40 flex items-start justify-between gap-4 shrink-0">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <span className="p-2 rounded-xl bg-rose-950/70 border border-rose-800/50 text-rose-300">
-                <Sliders className="w-5 h-5" />
-              </span>
-              <div>
-                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
-                  Capabilities & Rights Management
-                </h2>
-                <p className="text-xs text-zinc-400">
-                  User: <span className="text-zinc-200 font-semibold">{user.name}</span> ({user.email}) • ID: <span className="font-mono text-zinc-400">{user.id}</span>
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="text-right hidden sm:block">
-              <p className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Active Rights</p>
-              <p className="text-xs font-bold text-emerald-400 font-mono">
-                {totalEnabled} / {totalCaps} Enabled
+  const content = (
+    <div className={`w-full ${isEmbedded ? '' : 'max-w-5xl bg-zinc-950 border border-rose-900/40 rounded-2xl shadow-2xl overflow-hidden my-auto flex flex-col max-h-[92vh]'}`}>
+      {/* HEADER */}
+      <div className={`p-4 sm:p-6 border-b border-zinc-800/80 ${isEmbedded ? 'bg-zinc-950 rounded-2xl border border-zinc-800/80 mb-6' : 'bg-zinc-900/40'} flex items-start justify-between gap-4 shrink-0`}>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="p-2 rounded-xl bg-rose-950/70 border border-rose-800/50 text-rose-300">
+              <Sliders className="w-5 h-5" />
+            </span>
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                Capabilities & Rights Matrix
+              </h2>
+              <p className="text-xs text-zinc-400">
+                User: <span className="text-zinc-200 font-semibold">{user.name}</span> ({user.email}) • ID: <span className="font-mono text-zinc-400">{user.id}</span>
               </p>
             </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="text-right hidden sm:block">
+            <p className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Active Rights</p>
+            <p className="text-xs font-bold text-emerald-400 font-mono">
+              {totalEnabled} / {totalCaps} Enabled
+            </p>
+          </div>
+          {onClose && !isEmbedded && (
             <button
               onClick={onClose}
               className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors"
@@ -415,34 +417,35 @@ export const HoorviaCapabilitiesManager: React.FC<HoorviaCapabilitiesManagerProp
             >
               <X className="w-5 h-5" />
             </button>
-          </div>
+          )}
         </div>
+      </div>
 
-        {/* NOTIFICATION FEEDBACK */}
-        {message && (
-          <div
-            className={`px-6 py-2.5 text-xs flex items-center justify-between border-b ${
-              message.type === 'success'
-                ? 'bg-emerald-950/70 border-emerald-800/60 text-emerald-200'
-                : 'bg-rose-950/70 border-rose-800/60 text-rose-200'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              {message.type === 'success' ? (
-                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-              )}
-              <span>{message.text}</span>
-            </div>
-            <button onClick={() => setMessage(null)} className="text-zinc-400 hover:text-white">
-              <X className="w-3.5 h-3.5" />
-            </button>
+      {/* NOTIFICATION FEEDBACK */}
+      {message && (
+        <div
+          className={`px-6 py-2.5 text-xs flex items-center justify-between border-b rounded-xl mb-4 ${
+            message.type === 'success'
+              ? 'bg-emerald-950/70 border-emerald-800/60 text-emerald-200'
+              : 'bg-rose-950/70 border-rose-800/60 text-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {message.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+            )}
+            <span>{message.text}</span>
           </div>
-        )}
+          <button onClick={() => setMessage(null)} className="text-zinc-400 hover:text-white">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
-        {/* SCROLLABLE BODY */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-6 text-xs flex-1">
+      {/* SCROLLABLE BODY */}
+      <div className={`${isEmbedded ? 'space-y-6' : 'p-4 sm:p-6 overflow-y-auto space-y-6 flex-1'} text-xs`}>
           {/* ONE-CLICK ACCESS PACKS SECTION */}
           <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -716,18 +719,31 @@ export const HoorviaCapabilitiesManager: React.FC<HoorviaCapabilitiesManagerProp
         </div>
 
         {/* MODAL FOOTER */}
-        <div className="p-4 sm:p-5 border-t border-zinc-800/80 bg-zinc-900/30 flex items-center justify-between gap-3 shrink-0">
-          <p className="text-[11px] text-zinc-400">
-            Changes take effect immediately on live API requests and socket sessions.
-          </p>
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs transition-colors"
-          >
-            Done
-          </button>
-        </div>
+        {!isEmbedded && (
+          <div className="p-4 sm:p-5 border-t border-zinc-800/80 bg-zinc-900/30 flex items-center justify-between gap-3 shrink-0">
+            <p className="text-[11px] text-zinc-400">
+              Changes take effect immediately on live API requests and socket sessions.
+            </p>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs transition-colors"
+              >
+                Done
+              </button>
+            )}
+          </div>
+        )}
       </div>
+  );
+
+  if (isEmbedded) {
+    return content;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto">
+      {content}
     </div>
   );
 };

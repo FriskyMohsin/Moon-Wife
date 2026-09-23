@@ -11,7 +11,9 @@ export interface VoiceProfile {
   minPitchHz: number;
   maxPitchHz: number;
   avgPitchHz: number;
+  pitchStdDev: number;
   avgSpectralCentroid: number;
+  sampleCount: number;
   enrolledAt: number;
 }
 
@@ -23,7 +25,16 @@ export function getOwnerVoiceProfile(): VoiceProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.avgPitchHz === 'number') {
-      return parsed as VoiceProfile;
+      return {
+        enrolled: Boolean(parsed.enrolled),
+        minPitchHz: parsed.minPitchHz || 80,
+        maxPitchHz: parsed.maxPitchHz || 300,
+        avgPitchHz: parsed.avgPitchHz || 135,
+        pitchStdDev: typeof parsed.pitchStdDev === 'number' ? parsed.pitchStdDev : 15,
+        avgSpectralCentroid: parsed.avgSpectralCentroid || 1800,
+        sampleCount: parsed.sampleCount || 1,
+        enrolledAt: parsed.enrolledAt || Date.now(),
+      };
     }
   } catch (err) {
     console.warn('Failed to parse owner voice profile:', err);
@@ -31,20 +42,82 @@ export function getOwnerVoiceProfile(): VoiceProfile | null {
   return null;
 }
 
-export function saveOwnerVoiceProfile(profile: VoiceProfile): void {
+export function saveOwnerVoiceProfile(profile: VoiceProfile, isGuestMode: boolean = false): boolean {
+  if (isGuestMode) {
+    console.warn('[VOICEPRINT_SECURITY] Public/Guest users are forbidden from enrolling or overwriting Mohsin\'s voiceprint.');
+    return false;
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+    return true;
   } catch (err) {
     console.error('Failed to save owner voice profile:', err);
+    return false;
   }
 }
 
-export function clearOwnerVoiceProfile(): void {
+export function clearOwnerVoiceProfile(isGuestMode: boolean = false): boolean {
+  if (isGuestMode) {
+    console.warn('[VOICEPRINT_SECURITY] Public/Guest users are forbidden from resetting Mohsin\'s voiceprint.');
+    return false;
+  }
   try {
     localStorage.removeItem(STORAGE_KEY);
+    return true;
   } catch (err) {
     console.error('Failed to clear owner voice profile:', err);
+    return false;
   }
+}
+
+/**
+ * Builds a multi-sample VoiceProfile from 3-5 recorded audio sample frames.
+ * Discards temporary raw buffers after feature extraction.
+ */
+export function buildMultiSampleProfile(
+  sampleFrames: Array<Array<{ pitchHz: number; spectralCentroid: number }>>
+): VoiceProfile | null {
+  const allPitches: number[] = [];
+  const allCentroids: number[] = [];
+
+  for (const sample of sampleFrames) {
+    for (const frame of sample) {
+      if (frame.pitchHz >= 60 && frame.pitchHz <= 380) {
+        allPitches.push(frame.pitchHz);
+      }
+      if (frame.spectralCentroid > 200) {
+        allCentroids.push(frame.spectralCentroid);
+      }
+    }
+  }
+
+  if (allPitches.length === 0) {
+    return null;
+  }
+
+  const avgPitch = allPitches.reduce((a, b) => a + b, 0) / allPitches.length;
+  const minPitch = Math.min(...allPitches);
+  const maxPitch = Math.max(...allPitches);
+
+  const variance = allPitches.reduce((acc, p) => acc + Math.pow(p - avgPitch, 2), 0) / allPitches.length;
+  const pitchStdDev = Math.round(Math.sqrt(variance) * 10) / 10;
+
+  const avgCentroid = Math.round(
+    allCentroids.length > 0
+      ? allCentroids.reduce((a, b) => a + b, 0) / allCentroids.length
+      : 1800
+  );
+
+  return {
+    enrolled: true,
+    minPitchHz: Math.round(minPitch),
+    maxPitchHz: Math.round(maxPitch),
+    avgPitchHz: Math.round(avgPitch),
+    pitchStdDev: Math.max(8, pitchStdDev),
+    avgSpectralCentroid: avgCentroid,
+    sampleCount: sampleFrames.length,
+    enrolledAt: Date.now(),
+  };
 }
 
 /**
@@ -105,7 +178,8 @@ export function extractAudioFeatures(buffer: Float32Array, sampleRate: number = 
 export function verifyOwnerVoice(
   buffer: Float32Array,
   sampleRate: number,
-  profile: VoiceProfile | null
+  profile: VoiceProfile | null,
+  matchThreshold: number = 0.40
 ): { isOwner: boolean; confidence: number; reason: string; isVoiced: boolean; pitchHz: number; spectralCentroid: number } {
   const { pitchHz, spectralCentroid } = extractAudioFeatures(buffer, sampleRate);
 
@@ -113,7 +187,7 @@ export function verifyOwnerVoice(
     const isVoiced = pitchHz > 0;
     return {
       isOwner: true,
-      confidence: isVoiced ? 0.7 : 0.0,
+      confidence: isVoiced ? 0.70 : 0.0,
       reason: isVoiced ? 'Voiced speech frame (Owner voice profile not enrolled)' : 'Unvoiced / ambient noise frame',
       isVoiced,
       pitchHz,
@@ -134,28 +208,30 @@ export function verifyOwnerVoice(
   }
 
   // Pitch similarity check
-  const minAllowed = Math.max(50, profile.minPitchHz - 40);
-  const maxAllowed = profile.maxPitchHz + 40;
+  const minAllowed = Math.max(50, profile.minPitchHz - 35);
+  const maxAllowed = profile.maxPitchHz + 35;
   const isPitchInRange = pitchHz >= minAllowed && pitchHz <= maxAllowed;
 
   const pitchDiff = Math.abs(pitchHz - profile.avgPitchHz);
-  const pitchScore = Math.max(0, 1 - pitchDiff / 100);
+  const stdDevFactor = Math.max(15, (profile.pitchStdDev || 15) * 2.2);
+  const pitchScore = Math.max(0, 1 - pitchDiff / stdDevFactor);
 
   // Spectral centroid similarity
   const centroidDiff = Math.abs(spectralCentroid - profile.avgSpectralCentroid);
   const centroidScore = Math.max(0, 1 - centroidDiff / 2000);
 
-  const confidence = Math.round((pitchScore * 0.65 + centroidScore * 0.35) * 100) / 100;
-  const isOwner = isPitchInRange && confidence >= 0.40;
+  const confidence = Math.round((pitchScore * 0.70 + centroidScore * 0.30) * 100) / 100;
+  const isOwner = isPitchInRange && confidence >= matchThreshold;
 
   return {
     isOwner,
     confidence,
     reason: isOwner
-      ? `Owner voice match (${Math.round(confidence * 100)}% confidence, F0: ${Math.round(pitchHz)}Hz)`
-      : `Different speaker / background voice (F0: ${Math.round(pitchHz)}Hz vs Owner Profile: ${Math.round(profile.avgPitchHz)}Hz)`,
+      ? `OWNER SPEAKER VERIFIED (${Math.round(confidence * 100)}% confidence, F0: ${Math.round(pitchHz)}Hz)`
+      : `UNKNOWN SPEAKER REJECTED (F0: ${Math.round(pitchHz)}Hz vs Mohsin Baseline: ${Math.round(profile.avgPitchHz)}Hz)`,
     isVoiced: true,
     pitchHz,
     spectralCentroid,
   };
 }
+

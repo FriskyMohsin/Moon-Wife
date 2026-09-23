@@ -1,7 +1,7 @@
 import React from 'react';
 import { EmotionState, TimingDiagnostics, LocalRunnerState, isRunnerOnline } from '../types';
 import { EMOTION_MAP } from '../lib/emotionConfig';
-import { Menu, Heart, Brain, Settings, Wifi, WifiOff, Activity, Share2 } from 'lucide-react';
+import { Menu, Bot, Brain, Settings, Wifi, WifiOff, Activity, Share2 } from 'lucide-react';
 
 interface HeaderProps {
   emotion: EmotionState;
@@ -51,7 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2.5">
           <div className="relative">
             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-rose-600 to-violet-800 p-0.5 shadow-md shadow-rose-950/50 flex items-center justify-center">
-              <Heart className="w-3.5 h-3.5 text-rose-200 fill-rose-400/40" />
+              <Bot className="w-4 h-4 text-rose-100" />
             </div>
             <span
               className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-zinc-950 ${

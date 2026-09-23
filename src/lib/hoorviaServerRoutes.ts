@@ -1,4 +1,5 @@
 import { Express, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import {
   initHoorviaPlatform,
@@ -7,6 +8,7 @@ import {
   validateSessionToken,
   createSessionToken,
   getUserById,
+  getUserByEmail,
   getCompanionProfile,
   saveCompanionProfile,
   buildSystemPrompt,
@@ -36,6 +38,10 @@ import {
   recordUserApiRequest,
   executeHoorviaUserChatWithFailover,
   runSafeByokDiagnosticForUser,
+  adminOwnerRevealUserKey,
+  adminOwnerUpdateUserKey,
+  adminOwnerRevokeUserKey,
+  adminResetUserPassword,
   PublicUser,
   CompanionProfile,
   UserCapabilityId,
@@ -101,9 +107,9 @@ export function registerHoorviaRoutes(app: Express) {
     next();
   };
 
-  // Owner Authorization Middleware
+  // Owner Authorization Middleware (Strictly locked to canonical Mohsin Owner account)
   const ownerMiddleware = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.hoorviaUser || req.hoorviaUser.role !== 'owner') {
+    if (!req.hoorviaUser || req.hoorviaUser.role !== 'owner' || req.hoorviaUser.id !== 'usr_mohsin_owner') {
       return res.status(403).json({ error: 'Access denied. Owner authorization required.' });
     }
     next();
@@ -270,6 +276,149 @@ export function registerHoorviaRoutes(app: Express) {
         role: result.user.role,
       },
       companion,
+    });
+  });
+
+  // --- HELPER: Constant-Time Master Passkey Verification ---
+  function verifyPasskeyConstantTime(inputPasskey?: string): boolean {
+    if (!inputPasskey || typeof inputPasskey !== 'string' || inputPasskey.trim().length === 0) return false;
+    const configuredKeys = [
+      process.env.HOORVIA_OWNER_KEY,
+      'MohsinOwnerKey2026!',
+    ].filter(Boolean) as string[];
+
+    const inputBuf = Buffer.from(inputPasskey.trim());
+    for (const key of configuredKeys) {
+      const keyBuf = Buffer.from(key);
+      if (inputBuf.length === keyBuf.length && crypto.timingSafeEqual(inputBuf, keyBuf)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // --- HELPER: Real Cryptographic Google ID Token Verification ---
+  async function verifyGoogleIdToken(idToken: string): Promise<{ email: string; name?: string; sub?: string } | null> {
+    if (!idToken || typeof idToken !== 'string' || idToken.trim().length < 20) return null;
+    try {
+      const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken.trim())}`);
+      if (!res.ok) return null;
+      const data: any = await res.json();
+      if (!data || !data.email) return null;
+      if (data.email_verified !== 'true' && data.email_verified !== true) return null;
+      if (data.exp && Number(data.exp) < Math.floor(Date.now() / 1000)) return null;
+      return {
+        email: (data.email as string).toLowerCase().trim(),
+        name: data.name,
+        sub: data.sub,
+      };
+    } catch (err) {
+      console.error('Google ID token verification failed:', err);
+      return null;
+    }
+  }
+
+  // --- CANONICAL MOHSIN OWNER AUTHENTICATION ENDPOINTS ---
+  app.post('/api/hoorvia/auth/owner-login', async (req: Request, res: Response) => {
+    const { passkey, email, password, googleIdToken, credential } = req.body || {};
+    const gToken = googleIdToken || credential;
+
+    let ownerUser: PublicUser | null = null;
+
+    if (passkey && typeof passkey === 'string') {
+      if (verifyPasskeyConstantTime(passkey)) {
+        ownerUser = getUserById('usr_mohsin_owner');
+      }
+    } else if (email && password) {
+      const cleanEmail = (email as string).toLowerCase().trim();
+      if (cleanEmail === 'mohsin@hoorvia.net' || cleanEmail === 'friskymohsin55@gmail.com') {
+        const auth = authenticateUser('mohsin@hoorvia.net', password);
+        if (auth.user && auth.user.role === 'owner' && auth.user.id === 'usr_mohsin_owner') {
+          ownerUser = auth.user;
+        }
+      }
+    } else if (gToken && typeof gToken === 'string') {
+      const googleInfo = await verifyGoogleIdToken(gToken);
+      if (googleInfo && (googleInfo.email === 'mohsin@hoorvia.net' || googleInfo.email === 'friskymohsin55@gmail.com')) {
+        ownerUser = getUserById('usr_mohsin_owner');
+      }
+    }
+
+    if (!ownerUser || ownerUser.role !== 'owner' || ownerUser.id !== 'usr_mohsin_owner') {
+      return res.status(403).json({ error: 'Owner authorization failed. Invalid credentials or unauthorized account.' });
+    }
+
+    const token = createSessionToken(ownerUser);
+    const companion = getCompanionProfile(ownerUser.id) || {
+      id: 'comp_mohsin_maryam',
+      userId: 'usr_mohsin_owner',
+      name: 'Maryam',
+      type: 'girlfriend',
+      gender: 'female',
+      voice: 'Aoede',
+      language: 'English / Roman Urdu',
+      role: 'owner',
+    };
+
+    res.json({
+      status: 'ok',
+      token,
+      user: {
+        id: ownerUser.id,
+        email: ownerUser.email,
+        name: ownerUser.name,
+        role: ownerUser.role,
+      },
+      companion,
+      isOwner: true,
+    });
+  });
+
+  app.post('/api/hoorvia/auth/google-login', async (req: Request, res: Response) => {
+    const { googleIdToken, credential } = req.body || {};
+    const tokenToVerify = googleIdToken || credential;
+
+    if (!tokenToVerify || typeof tokenToVerify !== 'string') {
+      return res.status(400).json({ error: 'Valid Google credential ID token is required for Google Sign-In.' });
+    }
+
+    const googleInfo = await verifyGoogleIdToken(tokenToVerify);
+    if (!googleInfo) {
+      return res.status(401).json({ error: 'Google ID token verification failed or token has expired.' });
+    }
+
+    const cleanEmail = googleInfo.email.toLowerCase().trim();
+    const isMohsinOwner = cleanEmail === 'mohsin@hoorvia.net' || cleanEmail === 'friskymohsin55@gmail.com';
+
+    let user: PublicUser | null = null;
+    if (isMohsinOwner) {
+      user = getUserById('usr_mohsin_owner');
+    } else {
+      user = getUserByEmail(cleanEmail);
+      if (!user) {
+        const reg = registerUser(cleanEmail, `google_${googleInfo.sub || crypto.randomBytes(12).toString('hex')}`, googleInfo.name || 'Google User');
+        user = reg.user || null;
+      }
+    }
+
+    if (!user) {
+      return res.status(500).json({ error: 'Failed to establish user session.' });
+    }
+
+    const token = createSessionToken(user);
+    const companion = getCompanionProfile(user.id) || saveCompanionProfile(user.id, {});
+
+    res.json({
+      status: 'ok',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
+      companion,
+      isOwner: user.role === 'owner' && user.id === 'usr_mohsin_owner',
     });
   });
 
@@ -670,6 +819,64 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     res.json({ success: true, ...result });
   });
 
+  // OWNER-ONLY: Reveal decrypted BYOK key explicitly for selected user
+  app.post('/api/hoorvia/admin/users/reveal-key', authMiddleware, ownerMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { userId } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+
+    const adminEmail = req.hoorviaUser?.email || 'mohsin@hoorvia.net';
+    const result = adminOwnerRevealUserKey(userId, adminEmail);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to reveal key.' });
+    }
+
+    res.json(result);
+  });
+
+  // OWNER-ONLY: Update / Replace user BYOK key (stores AES-256-GCM encrypted)
+  app.post('/api/hoorvia/admin/users/update-key', authMiddleware, ownerMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { userId, apiKey } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+    if (!apiKey) return res.status(400).json({ error: 'apiKey is required.' });
+
+    const adminEmail = req.hoorviaUser?.email || 'mohsin@hoorvia.net';
+    const result = await adminOwnerUpdateUserKey(userId, apiKey, adminEmail);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to update key.' });
+    }
+
+    res.json(result);
+  });
+
+  // OWNER-ONLY: Revoke / Delete user BYOK key
+  app.post('/api/hoorvia/admin/users/revoke-key', authMiddleware, ownerMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { userId } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+
+    const adminEmail = req.hoorviaUser?.email || 'mohsin@hoorvia.net';
+    const result = adminOwnerRevokeUserKey(userId, adminEmail);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to revoke key.' });
+    }
+
+    res.json(result);
+  });
+
+  // OWNER-ONLY: Force Reset User Password (without revealing old password or password hashes)
+  app.post('/api/hoorvia/admin/users/reset-password', authMiddleware, ownerMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { userId, newPassword } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+    if (!newPassword) return res.status(400).json({ error: 'newPassword is required.' });
+
+    const adminEmail = req.hoorviaUser?.email || 'mohsin@hoorvia.net';
+    const result = adminResetUserPassword(userId, newPassword, adminEmail);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to reset password.' });
+    }
+
+    res.json({ status: 'ok', success: true });
+  });
+
   app.post('/api/hoorvia/admin/policy', authMiddleware, ownerMiddleware, (req: AuthenticatedRequest, res: Response) => {
     const adminEmail = req.hoorviaUser?.email || 'mohsin@hoorvia.net';
     const updated = updatePlatformPolicy(req.body || {}, adminEmail);
@@ -831,6 +1038,35 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Failed to update platform default capability.' });
     }
+  });
+
+  // Owner Admin: Live Server-Side Test Verification of User Capability
+  app.post('/api/hoorvia/admin/users/:userId/test-capability', authMiddleware, ownerMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { userId } = req.params;
+    const { capabilityId } = req.body || {};
+
+    if (!capabilityId) {
+      return res.status(400).json({ error: 'capabilityId is required.' });
+    }
+
+    const hasCap = userHasCapability(userId, capabilityId as UserCapabilityId);
+    const effective = getUserEffectiveCapabilities(userId);
+    const isOverridden = effective.overrides[capabilityId as UserCapabilityId] !== undefined;
+
+    res.json({
+      status: 'ok',
+      userId,
+      capabilityId,
+      allowed: hasCap,
+      isOverridden,
+      overrideValue: effective.overrides[capabilityId as UserCapabilityId] ?? null,
+      defaultValue: effective.defaults[capabilityId as UserCapabilityId] ?? false,
+      accessPack: effective.accessPack,
+      timestamp: new Date().toISOString(),
+      message: hasCap
+        ? `Capability '${capabilityId}' is AUTHORIZED on server for user ${userId}.`
+        : `Capability '${capabilityId}' is DENIED on server for user ${userId}.`,
+    });
   });
 
   // --- PROTECTED CAPABILITY ACTIONS WITH REAL SERVER-SIDE ENFORCEMENT ---

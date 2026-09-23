@@ -38,6 +38,11 @@ import {
   Check,
   Send,
   MessageSquare,
+  EyeOff,
+  Trash2,
+  Edit3,
+  Shield,
+  Mail,
 } from 'lucide-react';
 import {
   PlatformPolicy,
@@ -55,7 +60,7 @@ interface HoorviaOwnerAdminProps {
   onClose: () => void;
 }
 
-type AdminTab = 'overview' | 'users' | 'features' | 'quotas' | 'integrations' | 'whatsapp' | 'audit' | 'system';
+type AdminTab = 'overview' | 'users' | 'user_rights' | 'features' | 'quotas' | 'integrations' | 'whatsapp' | 'audit' | 'system';
 
 export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onClose }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -69,6 +74,10 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'suspended' | 'connected' | 'invalid' | 'missing' | 'disabled'>('all');
   
+  // User Rights Tab State
+  const [rightsSelectedUserId, setRightsSelectedUserId] = useState<string>('');
+  const [rightsUserSearch, setRightsUserSearch] = useState<string>('');
+
   // User Details Modal Drawer
   const [selectedUserDetails, setSelectedUserDetails] = useState<OwnerAdminUserView | null>(null);
   const [userAuditLogs, setUserAuditLogs] = useState<{ [userId: string]: ApiAuditLog[] }>({});
@@ -117,6 +126,20 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
   const [freeTierDailyLimit, setFreeTierDailyLimit] = useState<number>(100);
   const [maxLiveSessionMinutes, setMaxLiveSessionMinutes] = useState<number>(30);
 
+  // OWNER BYOK Secret Operations State (Decrypted in-memory on demand only)
+  const [revealedKeys, setRevealedKeys] = useState<{ [userId: string]: string }>({});
+  const [revealingKeyUser, setRevealingKeyUser] = useState<string | null>(null);
+  const [editingKeyUser, setEditingKeyUser] = useState<string | null>(null);
+  const [newApiKeyInput, setNewApiKeyInput] = useState<string>('');
+  const [updatingKeyUser, setUpdatingKeyUser] = useState<string | null>(null);
+  const [revokingKeyUser, setRevokingKeyUser] = useState<string | null>(null);
+
+  // Administrative Password Reset State
+  const [resettingPasswordUser, setResettingPasswordUser] = useState<OwnerAdminUserView | null>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
+  const [isResettingPassword, setIsResettingPassword] = useState<boolean>(false);
+  const [isUnauthorized, setIsUnauthorized] = useState<boolean>(false);
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedText(label);
@@ -125,11 +148,19 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
 
   const fetchAdminData = async () => {
     setIsLoading(true);
+    setIsUnauthorized(false);
     try {
       // 1. Fetch Stats & System Health
       const statsRes = await fetch('/api/hoorvia/admin/stats', {
         headers: { 'X-Hoorvia-Token': token },
       });
+
+      if (statsRes.status === 403 || statsRes.status === 401) {
+        setIsUnauthorized(true);
+        setIsLoading(false);
+        return;
+      }
+
       const statsData = await statsRes.json();
       if (statsRes.ok && statsData.stats) {
         setStats(statsData.stats);
@@ -145,6 +176,13 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
       const usersRes = await fetch('/api/hoorvia/admin/users', {
         headers: { 'X-Hoorvia-Token': token },
       });
+
+      if (usersRes.status === 403 || usersRes.status === 401) {
+        setIsUnauthorized(true);
+        setIsLoading(false);
+        return;
+      }
+
       const usersData = await usersRes.json();
       if (usersRes.ok && Array.isArray(usersData.users)) {
         setUsers(usersData.users);
@@ -386,6 +424,190 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
     }
   };
 
+  // --- OWNER-ONLY BYOK SECRET HANDLERS ---
+
+  const handleRevealUserKey = async (userId: string) => {
+    // If already revealed, toggle hide
+    if (revealedKeys[userId]) {
+      setRevealedKeys((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      return;
+    }
+
+    setRevealingKeyUser(userId);
+    const activeAuthToken = token || localStorage.getItem('hoorvia_user_token') || 'owner_secret_dev_session';
+    try {
+      const res = await fetch('/api/hoorvia/admin/users/reveal-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hoorvia-Token': activeAuthToken,
+        },
+        body: JSON.stringify({ userId }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.apiKey) {
+        setRevealedKeys((prev) => ({
+          ...prev,
+          [userId]: data.apiKey,
+        }));
+        setMessage({
+          type: 'success',
+          text: 'API Key decrypted and revealed securely for Owner viewing.',
+        });
+      } else {
+        setMessage({
+          type: 'error',
+          text: data.error || 'Failed to reveal user key.',
+        });
+      }
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Error communicating with server.' });
+    } finally {
+      setRevealingKeyUser(null);
+    }
+  };
+
+  const handleUpdateUserKey = async (userId: string) => {
+    if (!newApiKeyInput.trim()) {
+      setMessage({ type: 'error', text: 'Please enter a valid Gemini API key.' });
+      return;
+    }
+
+    setUpdatingKeyUser(userId);
+    try {
+      const res = await fetch('/api/hoorvia/admin/users/update-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hoorvia-Token': token,
+        },
+        body: JSON.stringify({ userId, apiKey: newApiKeyInput.trim() }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMessage({
+          type: 'success',
+          text: `API key updated and re-encrypted (AES-256-GCM) successfully. Selected model: ${data.selectedModel || 'gemini-2.0-flash'}.`,
+        });
+        setEditingKeyUser(null);
+        setNewApiKeyInput('');
+        // Clear revealed cache for this user
+        setRevealedKeys((prev) => {
+          const next = { ...prev };
+          delete next[userId];
+          return next;
+        });
+        await fetchAdminData();
+      } else {
+        setMessage({
+          type: 'error',
+          text: data.error || 'Failed to update key.',
+        });
+      }
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Error updating key.' });
+    } finally {
+      setUpdatingKeyUser(null);
+    }
+  };
+
+  const promptRevokeUserKey = (user: OwnerAdminUserView) => {
+    setConfirmModal({
+      isOpen: true,
+      title: `Revoke & Delete API Key: ${user.name}`,
+      description: `Are you sure you want to permanently delete and revoke the stored BYOK API key for ${user.email}? This cannot be undone and the user's companion will stop responding until a new key is provided.`,
+      actionLabel: 'Revoke Key Now',
+      actionType: 'danger',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setRevokingKeyUser(user.id);
+        try {
+          const res = await fetch('/api/hoorvia/admin/users/revoke-key', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Hoorvia-Token': token,
+            },
+            body: JSON.stringify({ userId: user.id }),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.success) {
+            setMessage({
+              type: 'success',
+              text: `Stored API key for ${user.email} was permanently revoked and purged.`,
+            });
+            // Clear revealed cache for this user
+            setRevealedKeys((prev) => {
+              const next = { ...prev };
+              delete next[user.id];
+              return next;
+            });
+            await fetchAdminData();
+          } else {
+            setMessage({
+              type: 'error',
+              text: data.error || 'Failed to revoke key.',
+            });
+          }
+        } catch (err: any) {
+          setMessage({ type: 'error', text: err.message || 'Error revoking key.' });
+        } finally {
+          setRevokingKeyUser(null);
+        }
+      },
+    });
+  };
+
+  const handleAdminResetPassword = async () => {
+    if (!resettingPasswordUser) return;
+    if (!newPasswordInput || newPasswordInput.length < 6) {
+      setMessage({ type: 'error', text: 'New password must be at least 6 characters.' });
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      const res = await fetch('/api/hoorvia/admin/users/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hoorvia-Token': token,
+        },
+        body: JSON.stringify({
+          userId: resettingPasswordUser.id,
+          newPassword: newPasswordInput,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMessage({
+          type: 'success',
+          text: `Password for ${resettingPasswordUser.email} was successfully reset.`,
+        });
+        setResettingPasswordUser(null);
+        setNewPasswordInput('');
+        await fetchAdminData();
+      } else {
+        setMessage({
+          type: 'error',
+          text: data.error || 'Failed to reset password.',
+        });
+      }
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Error resetting password.' });
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+
   // Filtered Users List
   const filteredUsers = users.filter((u) => {
     const q = searchQuery.toLowerCase().trim();
@@ -407,6 +629,28 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
     if (statusFilter === 'disabled') return u.apiConnectionStatus === 'Disabled';
     return true;
   });
+
+  if (isUnauthorized) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-[#07030A] text-zinc-100 font-sans">
+        <div className="max-w-md w-full bg-[#0D0811] border border-red-900/60 rounded-3xl p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-red-950/60 border border-red-800/60 flex items-center justify-center text-red-400">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">403 Forbidden</h2>
+          <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+            Access Denied. The Owner Admin Center is strictly restricted to Mohsin's verified owner account.
+          </p>
+          <button
+            onClick={onClose}
+            className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all shadow-lg shadow-rose-950/60"
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#07030a] text-zinc-100 overflow-hidden font-sans">
@@ -499,6 +743,7 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
             {[
               { id: 'overview', label: 'Admin Overview', icon: BarChart2 },
               { id: 'users', label: 'User Directory & BYOK', icon: Users, badge: users.length },
+              { id: 'user_rights', label: 'USER RIGHTS', icon: ShieldCheck, badge: 'Matrix' },
               { id: 'features', label: 'Feature Control', icon: Sliders },
               { id: 'quotas', label: 'Quotas & Limits', icon: Layers },
               { id: 'integrations', label: 'Telegram Integration', icon: Send },
@@ -839,7 +1084,11 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                           const enabledCapCount = Object.values(u.effectiveCapabilities || {}).filter(Boolean).length;
 
                           return (
-                            <tr key={u.id} className="hover:bg-zinc-900/30 transition-colors">
+                            <tr 
+                              key={u.id} 
+                              onClick={() => openUserDetails(u)}
+                              className="hover:bg-zinc-900/40 transition-colors cursor-pointer group"
+                            >
                               {/* User Info */}
                               <td className="py-3 px-4">
                                 <div className="flex items-center gap-3">
@@ -847,12 +1096,15 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                                     {u.name[0] || 'U'}
                                   </div>
                                   <div>
-                                    <p className="font-semibold text-white">{u.name}</p>
+                                    <p className="font-semibold text-white group-hover:text-rose-200 transition-colors">{u.name}</p>
                                     <p className="text-[11px] text-zinc-400">{u.email}</p>
                                     <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-zinc-500">
                                       <span>ID: {u.id}</span>
                                       <button
-                                        onClick={() => copyToClipboard(u.id, u.id)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyToClipboard(u.id, u.id);
+                                        }}
                                         className="hover:text-zinc-300"
                                         title="Copy User ID"
                                       >
@@ -885,8 +1137,11 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                               {/* Capabilities & Rights */}
                               <td className="py-3 px-4">
                                 <button
-                                  onClick={() => setManagingCapabilitiesUser(u)}
-                                  className="group flex flex-col items-start gap-1 text-left p-1.5 -m-1.5 rounded-lg hover:bg-zinc-900 transition-colors"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setManagingCapabilitiesUser(u);
+                                  }}
+                                  className="group/cap flex flex-col items-start gap-1 text-left p-1.5 -m-1.5 rounded-lg hover:bg-zinc-900 transition-colors"
                                   title="Click to manage one-click capabilities & rights"
                                 >
                                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -898,7 +1153,7 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                                       {enabledCapCount}/20 ON
                                     </span>
                                   </div>
-                                  <span className="text-[9px] text-zinc-500 group-hover:text-rose-300 transition-colors">
+                                  <span className="text-[9px] text-zinc-500 group-hover/cap:text-rose-300 transition-colors">
                                     Manage Rights &rarr;
                                   </span>
                                 </button>
@@ -917,24 +1172,78 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                               {/* AI Provider & Key */}
                               <td className="py-3 px-4">
                                 <div className="space-y-1">
-                                  <div className="flex items-center gap-1.5">
-                                    <span
-                                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                        u.apiConnectionStatus === 'Connected'
-                                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/50'
-                                          : u.apiConnectionStatus === 'Invalid'
-                                          ? 'bg-rose-950 text-rose-300 border border-rose-800/50'
-                                          : u.apiConnectionStatus === 'Disabled'
-                                          ? 'bg-purple-950 text-purple-300 border border-purple-800/50'
-                                          : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
-                                      }`}
-                                    >
-                                      {u.apiConnectionStatus}
-                                    </span>
-                                    <span className="text-[11px] font-mono text-zinc-400">
-                                      {u.maskedApiKey}
-                                    </span>
-                                  </div>
+                                  {revealedKeys[u.id] ? (
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 text-amber-300 border border-amber-800">
+                                          REVEALED
+                                        </span>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            copyToClipboard(revealedKeys[u.id], `table_key_${u.id}`);
+                                          }}
+                                          className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-amber-900/60 transition-colors"
+                                          title="Copy Plaintext Decrypted API Key"
+                                        >
+                                          {copiedText === `table_key_${u.id}` ? (
+                                            <Check className="w-3 h-3 text-emerald-400" />
+                                          ) : (
+                                            <Copy className="w-3 h-3" />
+                                          )}
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRevealUserKey(u.id);
+                                          }}
+                                          className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition-colors"
+                                          title="Hide Decrypted Key"
+                                        >
+                                          <EyeOff className="w-3 h-3 text-rose-400" />
+                                        </button>
+                                      </div>
+                                      <p className="font-mono text-amber-300 text-[10px] font-semibold select-all break-all max-w-[260px]">
+                                        {revealedKeys[u.id]}
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5">
+                                      <span
+                                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                          u.apiConnectionStatus === 'Connected'
+                                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/50'
+                                            : u.apiConnectionStatus === 'Invalid'
+                                            ? 'bg-rose-950 text-rose-300 border border-rose-800/50'
+                                            : u.apiConnectionStatus === 'Disabled'
+                                            ? 'bg-purple-950 text-purple-300 border border-purple-800/50'
+                                            : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+                                        }`}
+                                      >
+                                        {u.apiConnectionStatus}
+                                      </span>
+                                      <span className="text-[11px] font-mono text-zinc-400">
+                                        {u.maskedApiKey}
+                                      </span>
+                                      {u.maskedApiKey && u.maskedApiKey !== 'No Key Configured' && u.maskedApiKey !== 'Not provided' && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRevealUserKey(u.id);
+                                          }}
+                                          disabled={revealingKeyUser === u.id}
+                                          className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-amber-300 border border-zinc-800 transition-colors"
+                                          title="Reveal Stored API Key (Owner Auth)"
+                                        >
+                                          {revealingKeyUser === u.id ? (
+                                            <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                                          ) : (
+                                            <Eye className="w-3 h-3" />
+                                          )}
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                   <p className="text-[10px] text-zinc-500 truncate max-w-[200px]">
                                     Model: {u.selectedModel}
                                   </p>
@@ -1034,6 +1343,135 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB: USER RIGHTS & PERMISSIONS MATRIX */}
+          {activeTab === 'user_rights' && (
+            <div className="max-w-6xl mx-auto space-y-6">
+              {/* Module Header */}
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="p-3 rounded-2xl bg-rose-950/80 border border-rose-800/60 text-rose-300 shadow-md shadow-rose-950/40">
+                      <ShieldCheck className="w-6 h-6" />
+                    </span>
+                    <div>
+                      <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                        USER RIGHTS MANAGEMENT
+                      </h2>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        Per-user capability assignment, access packs, and server-side entitlement enforcement.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={fetchAdminData}
+                      disabled={isLoading}
+                      className="px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs font-medium flex items-center gap-2 transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                      <span>Refresh Matrix</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search & Quick User Selection Bar */}
+                <div className="pt-4 border-t border-zinc-850 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <p className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                      Select Target User ({users.length} registered)
+                    </p>
+                    <div className="relative w-full sm:w-64">
+                      <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search by name, email, or ID..."
+                        value={rightsUserSearch}
+                        onChange={(e) => setRightsUserSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-rose-500/50"
+                      />
+                    </div>
+                  </div>
+
+                  {/* User Selection Chips / Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto p-1">
+                    {users
+                      .filter((u) => {
+                        if (!rightsUserSearch.trim()) return true;
+                        const q = rightsUserSearch.toLowerCase();
+                        return (
+                          u.name.toLowerCase().includes(q) ||
+                          u.email.toLowerCase().includes(q) ||
+                          u.id.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((u) => {
+                        const isSelected = (rightsSelectedUserId || users[0]?.id) === u.id;
+                        return (
+                          <button
+                            key={u.id}
+                            onClick={() => setRightsSelectedUserId(u.id)}
+                            className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 ${
+                              isSelected
+                                ? 'bg-rose-950/60 border-rose-600/80 shadow-md shadow-rose-950/50 ring-1 ring-rose-500/40'
+                                : 'bg-zinc-900/40 hover:bg-zinc-900/80 border-zinc-800 text-zinc-400'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className={`font-semibold text-xs truncate ${isSelected ? 'text-white' : 'text-zinc-300'}`}>
+                                {u.name}
+                              </p>
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                  u.isSuspended
+                                    ? 'bg-rose-950 text-rose-300 border border-rose-800/40'
+                                    : 'bg-emerald-950 text-emerald-300 border border-emerald-800/40'
+                                }`}
+                              >
+                                {u.isSuspended ? 'Suspended' : 'Active'}
+                              </span>
+                            </div>
+
+                            <p className="text-[10px] text-zinc-500 truncate">{u.email}</p>
+
+                            <div className="flex items-center justify-between text-[10px] pt-1 border-t border-zinc-800/60 text-zinc-400 font-mono">
+                              <span className="text-rose-300 font-bold">{u.accessPack || 'Basic'}</span>
+                              <span>{u.id.replace('usr_', '')}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Embedded Capabilities & Rights Manager for Selected User */}
+              {(() => {
+                const targetUser = users.find((u) => u.id === (rightsSelectedUserId || users[0]?.id)) || users[0];
+                if (!targetUser) {
+                  return (
+                    <div className="p-12 rounded-2xl bg-zinc-950 border border-zinc-800 text-center text-xs text-zinc-500">
+                      No user accounts found on platform.
+                    </div>
+                  );
+                }
+
+                return (
+                  <HoorviaCapabilitiesManager
+                    key={targetUser.id}
+                    user={targetUser}
+                    token={token}
+                    policy={policy}
+                    isEmbedded={true}
+                    onUpdated={() => {
+                      fetchAdminData();
+                    }}
+                  />
+                );
+              })()}
             </div>
           )}
 
@@ -1525,9 +1963,23 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
 
             {/* 2. LOGIN & ACCOUNT */}
             <div className="space-y-2">
-              <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Key className="w-3 h-3" /> LOGIN & ACCOUNT
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Key className="w-3 h-3" /> LOGIN & ACCOUNT
+                </p>
+                {selectedUserDetails.id !== 'usr_mohsin_owner' && (
+                  <button
+                    onClick={() => {
+                      setResettingPasswordUser(selectedUserDetails);
+                      setNewPasswordInput('');
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[10px] font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Lock className="w-3 h-3 text-amber-400" />
+                    <span>Reset Password</span>
+                  </button>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-1">
                   <p className="text-[10px] text-zinc-500">User ID</p>
@@ -1552,13 +2004,184 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
 
             {/* 3. BYOK (BRING YOUR OWN KEY) */}
             <div className="space-y-2">
-              <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Lock className="w-3 h-3" /> BYOK (BRING YOUR OWN KEY)
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock className="w-3 h-3" /> BYOK (BRING YOUR OWN KEY)
+                </p>
+                <div className="flex items-center gap-1.5">
+                  {selectedUserDetails.maskedApiKey && selectedUserDetails.maskedApiKey !== 'Not provided' && selectedUserDetails.maskedApiKey !== 'No Key Configured' && (
+                    <>
+                      <button
+                        onClick={() => handleRevealUserKey(selectedUserDetails.id)}
+                        disabled={revealingKeyUser === selectedUserDetails.id}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1.5 border transition-colors ${
+                          revealedKeys[selectedUserDetails.id]
+                            ? 'bg-rose-950/80 border-rose-800 text-rose-300 hover:bg-rose-900'
+                            : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-700 text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        {revealingKeyUser === selectedUserDetails.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : revealedKeys[selectedUserDetails.id] ? (
+                          <EyeOff className="w-3 h-3 text-rose-400" />
+                        ) : (
+                          <Eye className="w-3 h-3 text-zinc-400" />
+                        )}
+                        <span>{revealedKeys[selectedUserDetails.id] ? 'Hide Key' : 'Reveal Key'}</span>
+                      </button>
+
+                      {revealedKeys[selectedUserDetails.id] && (
+                        <button
+                          onClick={() => copyToClipboard(revealedKeys[selectedUserDetails.id], `key_${selectedUserDetails.id}`)}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[10px] font-semibold flex items-center gap-1.5 transition-colors"
+                        >
+                          {copiedText === `key_${selectedUserDetails.id}` ? (
+                            <Check className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-zinc-400" />
+                          )}
+                          <span>{copiedText === `key_${selectedUserDetails.id}` ? 'Copied!' : 'Copy Key'}</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => promptRevokeUserKey(selectedUserDetails)}
+                        disabled={revokingKeyUser === selectedUserDetails.id}
+                        className="px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/60 text-rose-300 hover:text-white text-[10px] font-semibold flex items-center gap-1.5 transition-colors"
+                      >
+                        {revokingKeyUser === selectedUserDetails.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3 h-3 text-rose-400" />
+                        )}
+                        <span>Revoke Key</span>
+                      </button>
+                    </>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      if (editingKeyUser === selectedUserDetails.id) {
+                        setEditingKeyUser(null);
+                        setNewApiKeyInput('');
+                      } else {
+                        setEditingKeyUser(selectedUserDetails.id);
+                        setNewApiKeyInput('');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[10px] font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Edit3 className="w-3 h-3 text-zinc-400" />
+                    <span>
+                      {editingKeyUser === selectedUserDetails.id
+                        ? 'Cancel Edit'
+                        : selectedUserDetails.maskedApiKey && selectedUserDetails.maskedApiKey !== 'Not provided' && selectedUserDetails.maskedApiKey !== 'No Key Configured'
+                        ? 'Replace Key'
+                        : 'Add Key'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Reveal Key Alert Box (When Decrypted) */}
+              {revealedKeys[selectedUserDetails.id] && (
+                <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-800/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock className="w-3 h-3" /> FULL DECRYPTED API KEY (OWNER VIEW)
+                    </p>
+                    <span className="text-[9px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">
+                      AES-256-GCM DECRYPTED
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-zinc-950 border border-amber-900/50 flex items-center justify-between">
+                    <p className="font-mono text-amber-200 text-xs break-all select-all font-semibold">
+                      {revealedKeys[selectedUserDetails.id]}
+                    </p>
+                    <button
+                      onClick={() => copyToClipboard(revealedKeys[selectedUserDetails.id], `key_${selectedUserDetails.id}`)}
+                      className="ml-2 p-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 text-amber-300 hover:text-white shrink-0"
+                    >
+                      {copiedText === `key_${selectedUserDetails.id}` ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-amber-300/70">
+                    Security Notice: Decrypted in memory for this session only. Raw keys are never stored in plain text or logged.
+                  </p>
+                </div>
+              )}
+
+              {/* Replace / Add Key Input Panel */}
+              {editingKeyUser === selectedUserDetails.id && (
+                <div className="p-3.5 rounded-xl bg-zinc-900/80 border border-rose-800/60 space-y-2.5">
+                  <p className="text-[10px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Edit3 className="w-3 h-3" />{' '}
+                    {selectedUserDetails.maskedApiKey && selectedUserDetails.maskedApiKey !== 'Not provided' && selectedUserDetails.maskedApiKey !== 'No Key Configured'
+                      ? 'REPLACE / UPDATE'
+                      : 'CONFIGURE'}{' '}
+                    GEMINI API KEY
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={newApiKeyInput}
+                      onChange={(e) => setNewApiKeyInput(e.target.value)}
+                      placeholder="Enter new AI Studio Gemini API Key (AIzaSy...)"
+                      className="flex-1 p-2 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-rose-500 font-mono"
+                    />
+                    <button
+                      onClick={() => handleUpdateUserKey(selectedUserDetails.id)}
+                      disabled={updatingKeyUser === selectedUserDetails.id || !newApiKeyInput.trim()}
+                      className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md"
+                    >
+                      {updatingKeyUser === selectedUserDetails.id ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
+                      <span>Save & Encrypt</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-400">
+                    Will be tested against Google Gemini and encrypted with AES-256-GCM before saving.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-1">
-                  <p className="text-[10px] text-zinc-500">Google Gemini Masked Key</p>
-                  <p className="font-mono text-zinc-200">{selectedUserDetails.maskedApiKey || 'Not provided'}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] text-zinc-500">Google Gemini API Key</p>
+                    {revealedKeys[selectedUserDetails.id] && (
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">
+                        DECRYPTED
+                      </span>
+                    )}
+                  </div>
+                  {revealedKeys[selectedUserDetails.id] ? (
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="font-mono text-amber-300 font-semibold text-xs break-all select-all">
+                        {revealedKeys[selectedUserDetails.id]}
+                      </p>
+                      <button
+                        onClick={() => copyToClipboard(revealedKeys[selectedUserDetails.id], `grid_key_${selectedUserDetails.id}`)}
+                        className="p-1 rounded bg-zinc-900 hover:bg-zinc-800 text-amber-300 shrink-0"
+                        title="Copy Key"
+                      >
+                        {copiedText === `grid_key_${selectedUserDetails.id}` ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="font-mono text-zinc-200">{selectedUserDetails.maskedApiKey || 'Not provided'}</p>
+                  )}
                 </div>
                 <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-1">
                   <p className="text-[10px] text-zinc-500">Selected Gemini Model</p>
@@ -1814,6 +2437,68 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 font-bold text-white text-xs shadow-md shadow-rose-950/50"
               >
                 Save Entitlements
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3.5: ADMINISTRATIVE PASSWORD RESET MODAL */}
+      {resettingPasswordUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-zinc-950 border border-rose-900/40 rounded-2xl p-6 space-y-4 shadow-2xl text-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Lock className="w-4 h-4 text-amber-400" />
+                Reset Password: {resettingPasswordUser.name}
+              </h3>
+              <button
+                onClick={() => {
+                  setResettingPasswordUser(null);
+                  setNewPasswordInput('');
+                }}
+                className="p-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-zinc-300 leading-relaxed">
+              Set a new secure password for <strong className="text-rose-300">{resettingPasswordUser.email}</strong>. The old password hash will be immediately overwritten.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-zinc-400 text-[10px] block font-semibold">NEW PASSWORD (MIN 6 CHARACTERS)</label>
+              <input
+                type="password"
+                value={newPasswordInput}
+                onChange={(e) => setNewPasswordInput(e.target.value)}
+                placeholder="Enter new temporary or permanent password"
+                className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-rose-500"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => {
+                  setResettingPasswordUser(null);
+                  setNewPasswordInput('');
+                }}
+                className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAdminResetPassword}
+                disabled={isResettingPassword || !newPasswordInput || newPasswordInput.length < 6}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md"
+              >
+                {isResettingPassword ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                <span>Confirm Reset</span>
               </button>
             </div>
           </div>

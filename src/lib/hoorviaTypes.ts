@@ -507,7 +507,11 @@ export interface AdminAuditEntry {
     | 'enable_ai'
     | 'update_policy'
     | 'validate_user_key'
-    | 'adjust_quota';
+    | 'adjust_quota'
+    | 'reveal_byok_key'
+    | 'update_byok_key'
+    | 'revoke_byok_key'
+    | 'reset_user_password';
   targetUserId?: string;
   targetUserEmail?: string;
   details: string;

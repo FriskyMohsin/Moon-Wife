@@ -1,0 +1,8 @@
+.git
+.env*
+local-runner/logs
+local-runner/.runner-token
+local-runner/windows
+tests
+node_modules
+*.log

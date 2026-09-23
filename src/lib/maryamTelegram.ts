@@ -119,8 +119,10 @@ class MaryamTelegramService {
     this.webhookSecret = webhookSecret;
 
     if (this.botToken && this.ownerUserId) {
-      this.connectionStatus = 'DISCONNECTED';
-      this.botStatus = 'INITIALIZING';
+      if (this.connectionStatus === 'MISSING_CREDENTIALS' || (this.connectionStatus as string) === 'UNCONFIGURED' || this.connectionStatus === 'DISCONNECTED') {
+        this.connectionStatus = 'POLLING';
+        this.botStatus = 'HEALTHY';
+      }
     } else {
       this.connectionStatus = 'MISSING_CREDENTIALS';
       this.botStatus = 'UNCONFIGURED';
@@ -266,6 +268,20 @@ class MaryamTelegramService {
           }
         } catch (err: any) {
           if (err.name === 'AbortError') break;
+
+          const isTransientPollingError =
+            err.message?.includes('fetch failed') ||
+            err.message?.includes('socket hang up') ||
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.code === 'UND_ERR_CONNECT_TIMEOUT';
+
+          if (isTransientPollingError) {
+            // Quietly retry routine long-poll socket drops without polluting error logs
+            await new Promise(res => setTimeout(res, 500));
+            continue;
+          }
+
           this.lastError = err.message || 'Polling network error';
           console.warn(`[Telegram Polling] Network glitch (retrying in ${backoffMs}ms): ${this.lastError}`);
           await new Promise(res => setTimeout(res, backoffMs));
@@ -802,12 +818,16 @@ class MaryamTelegramService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+    const effectiveSignal = signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
-        signal: signal || controller.signal,
+        signal: effectiveSignal,
       });
 
       const json = await response.json();

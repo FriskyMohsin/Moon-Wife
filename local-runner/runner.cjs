@@ -89,6 +89,15 @@ if (!relayUrl) {
   relayUrl = DEFAULT_RELAY_URL;
 }
 
+// Status-only operational data for /health. Never store credentials, pairing
+// secrets, or browser session data here.
+const relayConnectionState = {
+  configured: Boolean(relayUrl),
+  lastSuccessfulResponseAt: 0,
+  lastErrorAt: 0,
+};
+let nativeHostRegistrationState = { status: 'not_checked' };
+
 // =========================================================================
 // SECURITY & SENSITIVE ACTION CONFIRMATION LAYER (CHALLENGE-RESPONSE)
 // =========================================================================
@@ -1389,17 +1398,37 @@ function selectAuthorizedChromeProfile(params = {}) {
   return profiles[role];
 }
 
-function isAnyChromeProcessRunning() {
-  if (process.platform !== 'win32') return false;
-  try {
-    const output = execFileSync('powershell', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      "@(Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\").Count"
-    ], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
-    return Number(String(output).trim()) > 0;
-  } catch (_) {
-    return true;
+function isProfileLocked(profileDirectory, userDataDir = CHROME_USER_DATA_DIR) {
+  const targetDir = path.isAbsolute(profileDirectory)
+    ? profileDirectory
+    : path.join(userDataDir, profileDirectory);
+  if (!fs.existsSync(targetDir)) return false;
+
+  // 1. Linux/Unix lock files
+  const unixLock = path.join(targetDir, 'SingletonLock');
+  const unixSocket = path.join(targetDir, 'SingletonSocket');
+  if (process.platform !== 'win32') {
+    if (fs.existsSync(unixLock) || fs.existsSync(unixSocket)) return true;
   }
+
+  // 2. Windows profile lock: Chrome holds an exclusive file lock on 'lockfile'
+  // or 'Preferences' or 'SingletonLock' inside the profile directory.
+  const lockCandidates = ['lockfile', 'SingletonLock', 'Preferences'];
+  for (const candidate of lockCandidates) {
+    const filePath = path.join(targetDir, candidate);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      // Attempt to open the file with write access (r+) to test if another process holds an exclusive lock
+      const fd = fs.openSync(filePath, 'r+');
+      fs.closeSync(fd);
+    } catch (err) {
+      if (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES') {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function findChromeExecutable() {
@@ -1428,6 +1457,276 @@ function findChromeExecutable() {
     if (fs.existsSync(p)) return p;
   }
   return 'chrome';
+}
+
+// -------------------------------------------------------------------------
+// Native Messaging Chrome Extension Bridge (Phase 1)
+// Bypasses CDP 9222 and controls Maryam tabs in existing Chrome instances
+// -------------------------------------------------------------------------
+
+const NATIVE_HOST_NAME = 'com.maryam.browser.bridge';
+const PAIRING_STORE_PATH = path.join(
+  process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Local'),
+  'Maryam',
+  'paired_profiles.json'
+);
+const NATIVE_HOST_REGISTRY_KEY = 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.maryam.browser.bridge';
+const NATIVE_HOST_MANIFEST_PATH = path.join(__dirname, 'native-host', 'com.maryam.browser.bridge.json');
+const NATIVE_HOST_SCRIPT_PATH = path.join(__dirname, 'native-host', 'native_host.bat');
+const TRUSTED_EXTENSION_ORIGIN = 'chrome-extension://ooalidlihcoemfijgdagllfkpbnhegjd/';
+
+function getCanonicalNativeHostConfiguration() {
+  return {
+    name: 'com.maryam.browser.bridge',
+    manifestPath: NATIVE_HOST_MANIFEST_PATH,
+    hostPath: NATIVE_HOST_SCRIPT_PATH,
+    allowedOrigin: TRUSTED_EXTENSION_ORIGIN,
+  };
+}
+
+// Repairs only a stale HKCU pointer to the canonical manifest. Pairing data is
+// never read, regenerated, or logged by this registration check.
+function ensureNativeHostRegistration() {
+  const config = getCanonicalNativeHostConfiguration();
+  if (process.platform !== 'win32') return { status: 'skipped', reason: 'windows_only' };
+  try {
+    const manifest = JSON.parse(fs.readFileSync(config.manifestPath, 'utf8'));
+    if (manifest.name !== config.name || manifest.path !== config.hostPath ||
+        !Array.isArray(manifest.allowed_origins) || manifest.allowed_origins.length !== 1 ||
+        manifest.allowed_origins[0] !== config.allowedOrigin || !fs.existsSync(config.hostPath)) {
+      return { status: 'invalid_canonical_manifest' };
+    }
+    let registeredPath = '';
+    try {
+      registeredPath = execFileSync('reg', ['query', NATIVE_HOST_REGISTRY_KEY, '/ve'], {
+        windowsHide: true, encoding: 'utf8', timeout: 5000
+      }).match(/REG_SZ\s+(.+)\s*$/m)?.[1]?.trim() || '';
+    } catch (_) {}
+    if (registeredPath === config.manifestPath) return { status: 'valid' };
+    execFileSync('reg', ['add', NATIVE_HOST_REGISTRY_KEY, '/ve', '/t', 'REG_SZ', '/d', config.manifestPath, '/f'], {
+      windowsHide: true, timeout: 5000
+    });
+    return { status: 'repaired' };
+  } catch (_) {
+    return { status: 'unavailable' };
+  }
+}
+
+// In-memory registry of enrolled profiles and pending tasks
+const enrolledExtensionSessions = new Map(); // role -> { role, email, socket/pending, verifiedAt }
+const pendingExtensionTasks = new Map(); // correlationId -> { resolve, reject, timer }
+const nativeHostTaskQueue = []; // queue of tasks to poll by native_host.cjs
+let extensionBridgeTestHooks = null;
+
+function loadOrGeneratePairingSecrets() {
+  const parentDir = path.dirname(PAIRING_STORE_PATH);
+  if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+  if (fs.existsSync(PAIRING_STORE_PATH)) {
+    const existing = JSON.parse(fs.readFileSync(PAIRING_STORE_PATH, 'utf8'));
+    if (existing?.primary?.pairingSecret && existing?.secondary?.pairingSecret) return existing;
+    throw new Error('PAIRING_STORE_CORRUPT: Existing pairing store is incomplete; refusing to rotate credentials automatically.');
+  }
+
+  // Generate cryptographically random pairing secrets for Mohsin's 2 authorized profiles
+  const secrets = {
+    primary: {
+      email: AUTHORIZED_BROWSER_ACCOUNTS.primary,
+      pairingSecret: crypto.randomBytes(16).toString('hex'),
+      createdAt: Date.now()
+    },
+    secondary: {
+      email: AUTHORIZED_BROWSER_ACCOUNTS.secondary,
+      pairingSecret: crypto.randomBytes(16).toString('hex'),
+      createdAt: Date.now()
+    }
+  };
+
+  fs.writeFileSync(PAIRING_STORE_PATH, JSON.stringify(secrets, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return secrets;
+}
+
+const pairingSecrets = loadOrGeneratePairingSecrets();
+
+function verifyProfilePairing(role, secret) {
+  if (!role || !secret) return { success: false, error: 'Missing role or secret' };
+  const expected = pairingSecrets[role];
+  if (!expected) {
+    return {
+      success: false,
+      error: `PROFILE_DENIED: Role '${role}' is not authorized. Only 'primary' and 'secondary' exist.`
+    };
+  }
+  if (expected.pairingSecret !== secret.trim()) {
+    return {
+      success: false,
+      error: 'PAIRING_DENIED: Invalid pairing secret for authorized profile.'
+    };
+  }
+  enrolledExtensionSessions.set(role, {
+    role,
+    email: expected.email,
+    verified: true,
+    lastSeen: Date.now()
+  });
+  return {
+    success: true,
+    profileRole: role,
+    profileEmail: expected.email
+  };
+}
+
+function createNativeBridgeHandshakeResponse(payload = {}) {
+  const result = verifyProfilePairing(payload.profileRole || 'primary', payload.pairingSecret || '');
+  if (result.success) {
+    return {
+      type: 'HANDSHAKE_RESPONSE',
+      success: true,
+      profileRole: result.profileRole,
+      profileEmail: result.profileEmail,
+    };
+  }
+  return {
+    type: 'HANDSHAKE_RESPONSE',
+    success: false,
+    error: result.error || 'HANDSHAKE_VERIFICATION_FAILED',
+  };
+}
+
+function isExtensionBridgeActive(role = 'primary') {
+  if (extensionBridgeTestHooks?.forceUnavailable) return false;
+  if (extensionBridgeTestHooks?.role === role) return true;
+  const session = enrolledExtensionSessions.get(role);
+  return Boolean(session && session.verified && (Date.now() - session.lastSeen < 60000));
+}
+
+// SPA actions have bounded extension-side waits. Their correlation allowance is
+// deliberately action-specific so a legitimate dynamic-page completion is not
+// discarded just before its acknowledgement returns. Other actions retain the
+// short default; this is not a global timeout increase.
+const EXTENSION_ACTION_TIMEOUT_MS = Object.freeze({
+  'browser.open': 20000,
+  'browser.navigate': 20000,
+  'browser.search': 20000,
+  'browser.click': 20000,
+  'browser.wait_for': 20000,
+});
+
+// Correlated dispatch to Chrome Extension via Native Messaging Host
+function dispatchToChromeExtension(action, params = {}, timeoutMs = EXTENSION_ACTION_TIMEOUT_MS[action] || 15000) {
+  return new Promise((resolve, reject) => {
+    const correlationId = 'ext_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    console.log(`[Browser Extension] Dispatch ${action} (${correlationId})`);
+    if (extensionBridgeTestHooks?.dispatch) {
+      Promise.resolve(extensionBridgeTestHooks.dispatch(action, params, correlationId)).then(resolve, reject);
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingExtensionTasks.delete(correlationId);
+      reject(new Error(`Extension task '${action}' timed out after ${timeoutMs / 1000}s on correlationId: ${correlationId}`));
+    }, timeoutMs);
+
+    pendingExtensionTasks.set(correlationId, { resolve, reject, timer });
+    nativeHostTaskQueue.push({
+      correlationId,
+      action,
+      params,
+      timestamp: Date.now()
+    });
+  });
+}
+
+// These operations are implemented by the paired extension and must never
+// silently fall back to CDP when that extension is the active control path.
+const EXTENSION_BROWSER_ACTIONS = new Set([
+  'browser.open', 'browser.navigate', 'browser.search', 'browser.read_page',
+  'browser.scroll', 'browser.click', 'browser.fill', 'browser.type',
+  'browser.press_key', 'browser.back', 'browser.forward', 'browser.refresh',
+  'browser.new_tab', 'browser.switch_tab', 'browser.close_tab',
+  'browser.get_tabs', 'browser.get_page_state', 'browser.wait_for',
+  'browser.media_play', 'browser.media_pause', 'browser.media_toggle',
+  'browser.media_seek', 'browser.media_restart', 'browser.media_get_state',
+]);
+
+function getActiveExtensionBridgeRole() {
+  if (isExtensionBridgeActive('primary')) return 'primary';
+  if (isExtensionBridgeActive('secondary')) return 'secondary';
+  return null;
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForExtensionBridge(role, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (isExtensionBridgeActive(role)) return true;
+    await delay(250);
+  }
+  return isExtensionBridgeActive(role);
+}
+
+async function launchPrimaryChromeForBridge(params = {}) {
+  // This is deliberately a normal Chrome profile launch.  Browser control
+  // remains exclusively in the existing Native Messaging extension bridge;
+  // do not add CDP, a debugging port, or a separate automation profile here.
+  const primaryProfile = selectAuthorizedChromeProfile({ ...params, profile: 'primary' });
+  const executable = findChromeExecutable();
+  const args = [
+    `--user-data-dir=${CHROME_USER_DATA_DIR}`,
+    `--profile-directory=${primaryProfile.directory}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+  ];
+
+  console.log(`[Browser Open] Starting authorized Primary Chrome profile for bridge recovery: ${primaryProfile.directory}`);
+  const child = spawn(executable, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+  child.unref();
+
+  return { executable, profile: primaryProfile };
+}
+
+async function dispatchBrowserViaActiveExtension(action, params = {}) {
+  if (!EXTENSION_BROWSER_ACTIONS.has(action)) return null;
+
+  // browser.open is intentionally Primary-only.  Other browser operations
+  // keep their existing active paired-session selection.
+  let role = action === 'browser.open'
+    ? (isExtensionBridgeActive('primary') ? 'primary' : null)
+    : getActiveExtensionBridgeRole();
+  if (!role && action === 'browser.open') {
+    // browser.open is the one operation that can establish the otherwise
+    // unavailable bridge.  Launch only the authorized Primary profile, then
+    // wait for its extension/native-host pairing before creating a task tab.
+    await launchPrimaryChromeForBridge(params);
+    if (!await waitForExtensionBridge('primary')) {
+      throw new Error('Primary Chrome was launched, but its paired browser extension bridge did not become available within 30 seconds. No browser windows or tabs were closed.');
+    }
+    role = 'primary';
+  }
+  if (!role) {
+    throw new Error(`Browser Extension bridge unavailable for ${action}: no verified PRIMARY or SECONDARY extension session. CDP fallback is disabled for Phase 2 actions.`);
+  }
+  const result = await dispatchToChromeExtension(action, params);
+  console.log(`[Browser Extension] Result ${action}`);
+  const tabId = result?.tabId;
+  if ((action === 'browser.open' || action === 'browser.new_tab') && tabId !== undefined) {
+    managedTabIds.add(String(tabId));
+    managedTabIds.add(Number(tabId));
+  }
+  if (action === 'browser.close_tab' && result?.closedId !== undefined) {
+    managedTabIds.delete(String(result.closedId));
+    managedTabIds.delete(Number(result.closedId));
+  }
+  return result;
+}
+
+function setExtensionBridgeTestHooks(hooks = null) {
+  extensionBridgeTestHooks = hooks;
 }
 
 function fetchCdpJson(endpoint) {
@@ -1644,8 +1943,8 @@ async function ensureBrowserOpen(initialUrl = 'https://www.google.com', params =
     throw new Error(`CDP port ${CDP_PORT} belongs to an unknown browser. Maryam will not attach to or terminate it.`);
   }
   if (!managedBrowser && !isRunning) {
-    if (isAnyChromeProcessRunning()) {
-      throw new Error('Chrome is already running without a Maryam-owned debugging session. Close it yourself before requesting browser automation; Maryam will not alter your existing Chrome session.');
+    if (isProfileLocked(selectedProfile.directory)) {
+      throw new Error(`The requested Chrome profile (${selectedProfile.email}) is currently open and locked by another Chrome window. Maryam will not interrupt or corrupt that profile. Please specify Mohsin's other authorized profile, or close that specific profile window.`);
     }
     const execPath = findChromeExecutable();
     const chromeArgs = [
@@ -1891,6 +2190,18 @@ async function inspectBrowserActionSecurity(actionName, params = {}, isTypeActio
 // 1. browser.open
 async function executeBrowserOpen(params = {}) {
   const url = params.url || 'https://www.google.com';
+
+  // If Chrome Extension Native Bridge is active, use it directly (NO CDP 9222, NO chrome.exe launch)
+  if (isExtensionBridgeActive('primary') || isExtensionBridgeActive('secondary')) {
+    console.log('[Browser Engine] Executing browser.open via Native Chrome Extension Bridge.');
+    const extRes = await dispatchToChromeExtension('browser.open', { url });
+    if (extRes && extRes.tabId) {
+      managedTabIds.add(String(extRes.tabId));
+      managedTabIds.add(Number(extRes.tabId));
+    }
+    return extRes;
+  }
+
   const tab = await ensureBrowserOpen(url, params);
   bringChromeToForeground();
   if (params.url) {
@@ -2261,10 +2572,22 @@ async function executeBrowserNewTab(params = {}) {
 
 // 11. browser.close_tab
 async function executeBrowserCloseTab(params = {}) {
-  await ensureBrowserOpen('https://www.google.com', params);
-  const tabs = await getTabs();
   let targetId = params.targetId;
   if (!targetId) throw new Error('browser.close_tab requires the explicit targetId of a Maryam-created tab.');
+
+  // If Chrome Extension Native Bridge is active, dispatch to extension
+  if (isExtensionBridgeActive('primary') || isExtensionBridgeActive('secondary')) {
+    if (!managedTabIds.has(String(targetId)) && !managedTabIds.has(Number(targetId))) {
+      throw new Error('Refusing to close a tab that Maryam did not create.');
+    }
+    const extRes = await dispatchToChromeExtension('browser.close_tab', { targetId });
+    managedTabIds.delete(String(targetId));
+    managedTabIds.delete(Number(targetId));
+    return extRes;
+  }
+
+  await ensureBrowserOpen('https://www.google.com', params);
+  const tabs = await getTabs();
   if (!managedTabIds.has(targetId)) throw new Error('Refusing to close a tab that Maryam did not create.');
   if (!tabs.some(t => t.id === targetId)) throw new Error('Requested Maryam-owned tab no longer exists.');
   await fetchCdpJson(`/json/close/${targetId}`);
@@ -2665,6 +2988,25 @@ function executeSystemHealth() {
   });
 }
 
+// Status-only probe for Maryam.  This reports this live runner process,
+// rather than a server-side relay cache or a previous conversational answer.
+function executeRunnerStatus() {
+  const bridgeRole = getActiveExtensionBridgeRole();
+  const relayConnected = relayConnectionState.configured &&
+    relayConnectionState.lastSuccessfulResponseAt > 0 &&
+    (Date.now() - relayConnectionState.lastSuccessfulResponseAt) < 45000;
+  return {
+    tool: 'system.runner_status',
+    status: 'ok',
+    source: 'live_canonical_runner',
+    runner: 'online',
+    relay: relayConnected ? 'connected' : 'disconnected',
+    browserBridge: bridgeRole ? 'available' : 'unavailable',
+    pairing: bridgeRole ? 'paired' : 'unpaired',
+    checkedAt: Date.now(),
+  };
+}
+
 function executeSystemNodeVersion() {
   return new Promise((resolve) => {
     resolve({
@@ -2680,14 +3022,23 @@ function executeSystemNodeVersion() {
   });
 }
 
-function executeOmnirouteStatus() {
+let cachedOmnirouteStatus = null;
+let lastOmnirouteStatusCheckAt = 0;
+const OMNIROUTE_STATUS_CACHE_TTL_MS = 30000;
+
+function executeOmnirouteStatus(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && cachedOmnirouteStatus && (now - lastOmnirouteStatusCheckAt < OMNIROUTE_STATUS_CACHE_TTL_MS)) {
+    return Promise.resolve(cachedOmnirouteStatus);
+  }
+
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
     const checkCmd = isWin ? 'where' : 'which';
 
     execFile(checkCmd, ['omniroute'], { windowsHide: true, timeout: 4000 }, (error, stdout) => {
       if (error || !stdout || !stdout.trim()) {
-        resolve({
+        const result = {
           tool: 'omniroute.status',
           available: false,
           path: null,
@@ -2695,7 +3046,10 @@ function executeOmnirouteStatus() {
           platform: process.platform,
           message: 'OmniRoute CLI is NOT found in system PATH on this Windows machine.',
           timestamp: Date.now(),
-        });
+        };
+        cachedOmnirouteStatus = result;
+        lastOmnirouteStatusCheckAt = Date.now();
+        resolve(result);
         return;
       }
 
@@ -2707,7 +3061,7 @@ function executeOmnirouteStatus() {
         const verMatch = rawVer.match(/(\d+\.\d+\.\d+[\w.-]*)/);
         const resolvedVersion = verMatch ? verMatch[1] : (rawVer || null);
 
-        resolve({
+        const result = {
           tool: 'omniroute.status',
           available: true,
           path: resolvedPath,
@@ -2715,7 +3069,10 @@ function executeOmnirouteStatus() {
           platform: process.platform,
           message: `OmniRoute CLI is verified on Windows machine at: ${resolvedPath}`,
           timestamp: Date.now(),
-        });
+        };
+        cachedOmnirouteStatus = result;
+        lastOmnirouteStatusCheckAt = Date.now();
+        resolve(result);
       });
     });
   });
@@ -4441,6 +4798,11 @@ async function executeDevFinalize(params = {}) {
 
 // Strict Allowlist Router
 async function routeTool(toolName, params = {}) {
+  // The authorized Native Messaging bridge is the sole control path for its
+  // supported browser actions. Do not degrade to CDP if dispatch fails.
+  const extensionResult = await dispatchBrowserViaActiveExtension(toolName, params);
+  if (extensionResult) return extensionResult;
+
   switch (toolName) {
     // Phase 5: Autonomous Software Development Orchestration (11 Tools)
     case 'dev.create_project':
@@ -4468,6 +4830,8 @@ async function routeTool(toolName, params = {}) {
 
     case 'system.health':
       return await executeSystemHealth();
+    case 'system.runner_status':
+      return executeRunnerStatus();
     case 'system.node_version':
       return await executeSystemNodeVersion();
     case 'omniroute.status':
@@ -4604,8 +4968,15 @@ async function routeTool(toolName, params = {}) {
   }
 }
 
+// Shared by the relay poller and regression tests so incoming relay work
+// cannot bypass the browser-extension routing gate.
+async function executeIncomingRelayTask(task) {
+  if (!task || !task.tool) throw new Error('Relay task is missing an allowlisted tool name.');
+  return routeTool(task.tool, task.params || {});
+}
+
 const ALL_ALLOWED_TOOLS = [
-  'system.health', 'system.node_version', 'omniroute.status', 'omniroute.version',
+  'system.health', 'system.runner_status', 'system.node_version', 'omniroute.status', 'omniroute.version',
   // Phase 5: Autonomous Software Development Orchestration (11 Tools)
   'dev.create_project', 'dev.inspect_project', 'dev.plan', 'dev.execute_plan',
   'dev.test', 'dev.fix_failures', 'dev.review', 'dev.status',
@@ -4617,11 +4988,13 @@ const ALL_ALLOWED_TOOLS = [
   'browser.open', 'browser.navigate', 'browser.search', 'browser.click',
   'browser.type', 'browser.scroll', 'browser.back', 'browser.forward',
   'browser.refresh', 'browser.new_tab', 'browser.close_tab', 'browser.switch_tab',
-  'browser.read_page', 'browser.get_url', 'browser.get_title', 'browser.screenshot',
+  'browser.read_page', 'browser.fill', 'browser.press_key', 'browser.get_tabs',
+  'browser.get_page_state', 'browser.wait_for', 'browser.get_url', 'browser.get_title', 'browser.screenshot',
   'browser.upload_file', 'browser.play', 'browser.pause', 'browser.seek',
   'browser.mute', 'browser.unmute', 'browser.volume', 'browser.fullscreen',
   'browser.get_playback_info', 'browser.media_play', 'browser.media_pause',
-  'browser.media_seek', 'browser.media_mute', 'browser.media_unmute',
+  'browser.media_seek', 'browser.media_toggle', 'browser.media_restart',
+  'browser.media_get_state', 'browser.media_mute', 'browser.media_unmute',
   'browser.media_volume', 'browser.media_fullscreen', 'browser.media_info',
   // Safe File tools (1 - 10)
   'file.list', 'file.read', 'file.create', 'file.write', 'file.append',
@@ -4661,6 +5034,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
     const isWin = process.platform === 'win32';
     const omni = await executeOmnirouteStatus();
+    const bridgeRole = getActiveExtensionBridgeRole();
+    const relayConnected = relayConnectionState.configured &&
+      relayConnectionState.lastSuccessfulResponseAt > 0 &&
+      (Date.now() - relayConnectionState.lastSuccessfulResponseAt) < 45000;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
@@ -4672,6 +5049,10 @@ const server = http.createServer(async (req, res) => {
       omnirouteVersion: omni.version,
       omniroutePath: omni.path,
       browserAutomationReady: true,
+      relay: relayConnected ? 'connected' : 'disconnected',
+      browserBridge: bridgeRole ? 'available' : 'unavailable',
+      pairing: bridgeRole ? 'paired' : 'unpaired',
+      nativeHostRegistration: nativeHostRegistrationState.status,
       allowedTools: ALL_ALLOWED_TOOLS,
       timestamp: Date.now(),
     }));
@@ -4719,6 +5100,60 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Native Messaging Host IPC endpoints (Strictly Localhost)
+  if (req.method === 'POST' && url.pathname === '/api/native-bridge/handshake') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const verifyRes = createNativeBridgeHandshakeResponse(payload);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(verifyRes));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/native-bridge/poll') {
+    // Return next task for extension or empty if none
+    const nextTask = nativeHostTaskQueue.shift() || null;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(nextTask || {}));
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/native-bridge/response') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const { correlationId, success, result, error } = payload;
+        if (correlationId && pendingExtensionTasks.has(correlationId)) {
+          const pending = pendingExtensionTasks.get(correlationId);
+          clearTimeout(pending.timer);
+          pendingExtensionTasks.delete(correlationId);
+          console.log(`[Browser Extension] Result ${correlationId}`);
+          if (success) {
+            pending.resolve(result);
+          } else {
+            pending.reject(new Error(error || 'Extension task execution failed'));
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'received' }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
@@ -4726,6 +5161,8 @@ const server = http.createServer(async (req, res) => {
 // Start listening strictly on 127.0.0.1
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
+    nativeHostRegistrationState = ensureNativeHostRegistration();
+    console.log(`[Native Host] Registration ${nativeHostRegistrationState.status}.`);
     const isWin = process.platform === 'win32';
     console.log('=================================================================');
     console.log('         MARYAM LOCAL TOOL RUNNER & BROWSER AUTOMATION           ');
@@ -4819,6 +5256,7 @@ function startRelayTunnel(targetUrl) {
           res.on('end', async () => {
             pollCount++;
             consecutiveErrors = 0; // reset error counter on successful HTTP response
+            relayConnectionState.lastSuccessfulResponseAt = Date.now();
 
             if (status === 204) {
               if (pollCount % 10 === 0) {
@@ -4835,7 +5273,7 @@ function startRelayTunnel(targetUrl) {
                   console.log(`\n>>> [Relay Task] Received tool request from Maryam: '${task.tool}' (Task ID: ${task.id})`);
                   const startTime = Date.now();
                   try {
-                    const result = await routeTool(task.tool, task.params || {});
+                    const result = await executeIncomingRelayTask(task);
                     const durationMs = Date.now() - startTime;
                     console.log(`<<< [Relay Task Completed] Tool '${task.tool}' executed in ${durationMs}ms.`);
                     sendRelayResult(cleanUrl, task.id, { success: true, result });
@@ -4873,6 +5311,7 @@ function startRelayTunnel(targetUrl) {
 
       req.on('error', (err) => {
         consecutiveErrors++;
+        relayConnectionState.lastErrorAt = Date.now();
         const backoff = Math.min(2000 * Math.pow(1.5, Math.min(consecutiveErrors, 6)), 30000);
         console.error(`[Relay Network Error] ${err.message}. Retrying in ${(backoff / 1000).toFixed(1)}s (attempt ${consecutiveErrors})...`);
         setTimeout(poll, backoff);
@@ -4887,6 +5326,7 @@ function startRelayTunnel(targetUrl) {
       req.end();
     } catch (err) {
       consecutiveErrors++;
+      relayConnectionState.lastErrorAt = Date.now();
       const backoff = Math.min(2000 * Math.pow(1.5, Math.min(consecutiveErrors, 6)), 30000);
       console.error(`[Relay Error] Unexpected error in poll loop: ${err.message}. Retrying in ${(backoff / 1000).toFixed(1)}s...`);
       setTimeout(poll, backoff);
@@ -4939,6 +5379,7 @@ function startRelayTunnel(targetUrl) {
 
 module.exports = {
   routeTool,
+  executeIncomingRelayTask,
   ALL_ALLOWED_TOOLS,
   validateAndResolveSafePath,
   isPathInBlockedDirectory,
@@ -4976,7 +5417,19 @@ module.exports = {
   AUTHORIZED_BROWSER_ACCOUNTS,
   readAuthorizedChromeProfiles,
   selectAuthorizedChromeProfile,
+  isProfileLocked,
   managedTabIds,
+  // Native Messaging Extension Bridge (Phase 1)
+  verifyProfilePairing,
+  createNativeBridgeHandshakeResponse,
+  isExtensionBridgeActive,
+  dispatchToChromeExtension,
+  setExtensionBridgeTestHooks,
+  pairingSecrets,
+  getCanonicalNativeHostConfiguration,
+  ensureNativeHostRegistration,
+  pendingExtensionTasks,
+  nativeHostTaskQueue,
   // Browser transfer tool
   executeBrowserUploadFile,
   // Phase 4 OmniRoute Coding Bridge

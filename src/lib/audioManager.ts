@@ -133,7 +133,7 @@ export class GeminiLiveAudioManager {
         // Verify Owner Voice Profile
         const voiceProfile = getOwnerVoiceProfile();
         const verification = verifyOwnerVoice(inputChannel, 16000, voiceProfile);
-        const { isOwner, confidence, isVoiced, pitchHz } = verification;
+        const { isOwner, confidence, isVoiced, pitchHz, reason } = verification;
 
         // 1. Requirement for Foreground Speech (voiced + clear signal above ambient noise floor)
         const isForegroundSpeech = isVoiced && rms > 0.038 && snr > 3.2 && pitchHz >= 70 && pitchHz <= 400;
@@ -168,6 +168,14 @@ export class GeminiLiveAudioManager {
         }
 
         const isSpeaking = isForegroundSpeech && (this.isGuestMode || (voiceProfile?.enrolled ? isOwner : true));
+
+        if (isForegroundSpeech && this.micFrameCount % 20 === 0) {
+          console.log(
+            `[SPEAKER_VERIFICATION] Match: ${isOwner ? 'YES' : 'NO'} | Confidence: ${Math.round(
+              confidence * 100
+            )}% | Reason: ${reason}`
+          );
+        }
 
         // Convert Float32 to 16-bit linear PCM
         const pcm16 = new Int16Array(inputChannel.length);

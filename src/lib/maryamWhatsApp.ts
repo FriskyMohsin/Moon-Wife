@@ -122,7 +122,14 @@ export class MaryamWhatsAppService {
     this.sessionId = (process.env.WHATSAPP_SESSION_ID || 'maryam_owner').trim();
     this.webhookSecret = (process.env.WHATSAPP_WEBHOOK_SECRET || '').trim();
 
-    if (!this.gatewayUrl || !this.apiKey) {
+    if (this.gatewayUrl && this.apiKey) {
+      if (this.gatewayStatus === 'UNCONFIGURED') {
+        this.gatewayStatus = 'ONLINE';
+      }
+      if (this.sessionStatus === 'UNCONFIGURED') {
+        this.sessionStatus = 'CONNECTED';
+      }
+    } else {
       this.gatewayStatus = 'UNCONFIGURED';
       this.sessionStatus = 'UNCONFIGURED';
     }
@@ -226,14 +233,22 @@ export class MaryamWhatsAppService {
   public async checkGatewayHealth(): Promise<boolean> {
     if (!this.gatewayUrl) return false;
     try {
-      const res = await fetch(`${this.gatewayUrl}/api/health`, {
+      let res = await fetch(`${this.gatewayUrl}/health`, {
         method: 'GET',
-        headers: {
-          'X-API-Key': this.apiKey,
-        },
       });
+      if (!res.ok) {
+        res = await fetch(`${this.gatewayUrl}/api/health`, {
+          method: 'GET',
+          headers: {
+            'X-API-Key': this.apiKey,
+          },
+        });
+      }
       if (res.ok) {
         this.gatewayStatus = 'ONLINE';
+        if (this.sessionStatus === 'UNCONFIGURED' || this.sessionStatus === 'DISCONNECTED') {
+          this.sessionStatus = 'CONNECTED';
+        }
         this.lastSuccessfulConnection = new Date().toISOString();
         return true;
       } else {

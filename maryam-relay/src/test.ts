@@ -97,6 +97,20 @@ async function runTests() {
     assert.strictEqual(badToolRes.status, 400, 'Non-allowlisted tool must yield 400');
     assert.strictEqual(badToolRes.body.error.includes('approved safety allowlist'), true);
 
+    // TEST 5.5: Published media tools are accepted by the actual relay enqueue endpoint.
+    console.log('[Test 5.5] Media tool exposure through relay allowlist');
+    for (const tool of ['browser.media_play', 'browser.media_pause', 'browser.media_toggle', 'browser.media_seek', 'browser.media_get_state']) {
+      assert.strictEqual(ALLOWED_TOOLS.has(tool), true, `${tool} must be published to Maryam`);
+      const mediaEnqueue = await request(
+        'POST',
+        '/api/runner/relay/task',
+        { 'x-runner-token': TEST_TOKEN },
+        { tool, params: tool === 'browser.media_seek' ? { seconds: 10 } : {} }
+      );
+      assert.strictEqual(mediaEnqueue.status, 201, `${tool} must reach the relay queue`);
+      taskStore.delete(mediaEnqueue.body.taskId);
+    }
+
     // TEST 6: Enqueue valid task & Poll
     console.log('[Test 6] Enqueue valid task & Poll round-trip');
     const enqueueRes = await request(

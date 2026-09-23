@@ -671,7 +671,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#0A070B] text-slate-100 flex flex-col md:flex-row font-sans selection:bg-rose-500/30">
+    <div className="min-h-screen bg-[#0A070B] text-slate-100 flex flex-col md:flex-row font-sans selection:bg-rose-500/30 overflow-x-hidden">
       {/* Sidebar Navigation */}
       <aside className="w-full md:w-64 md:h-screen md:sticky md:top-0 md:overflow-y-auto bg-slate-950/90 border-r border-rose-950/40 p-4 flex flex-col justify-between shrink-0">
         <div>
@@ -691,7 +691,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <p className="text-[10px] text-slate-400 truncate">{user.email}</p>
               </div>
             </div>
-            {user.role === 'owner' && onOpenOwnerAdmin && (
+            {user.role === 'owner' && user.id === 'usr_mohsin_owner' && onOpenOwnerAdmin && (
               <button
                 onClick={onOpenOwnerAdmin}
                 title="Owner Control Center"
@@ -733,7 +733,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               );
             })}
 
-            {user.role === 'owner' && onOpenOwnerAdmin && (
+            {user.role === 'owner' && user.id === 'usr_mohsin_owner' && onOpenOwnerAdmin && (
               <button
                 onClick={onOpenOwnerAdmin}
                 className="w-full mt-2 flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all bg-gradient-to-r from-rose-950/90 to-purple-950/90 border border-rose-600/60 text-rose-200 hover:text-white hover:border-rose-400 shadow-md shadow-rose-950/50 group"

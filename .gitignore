@@ -24,6 +24,10 @@ coverage/
 local-runner/.runner-token
 .runner-token
 *.runner-token
+*.BEFORE_*.cjs
+*.BEFORE_*.js
+*.bak
+*.backup
 MaryamAutomationProfile/
 ChromeProfile/
 

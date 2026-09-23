@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { AppSettings, GeminiVoiceName, WakeSensitivity, MicPermissionStatus } from '../types';
 import { WakeWordDetector } from '../lib/wakeWord';
-import { getOwnerVoiceProfile, saveOwnerVoiceProfile, clearOwnerVoiceProfile, extractAudioFeatures, VoiceProfile } from '../lib/voiceProfile';
-import { X, Settings, Volume2, Mic, Sliders, ShieldCheck, CheckCircle2, AlertTriangle, UserCheck, RefreshCw, Trash2, HelpCircle } from 'lucide-react';
+import {
+  getOwnerVoiceProfile,
+  saveOwnerVoiceProfile,
+  clearOwnerVoiceProfile,
+  extractAudioFeatures,
+  buildMultiSampleProfile,
+  VoiceProfile
+} from '../lib/voiceProfile';
+import { X, Settings, Volume2, Mic, Sliders, ShieldCheck, CheckCircle2, AlertTriangle, UserCheck, RefreshCw, Trash2, HelpCircle, Lock } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,6 +17,7 @@ interface SettingsModalProps {
   settings: AppSettings;
   onUpdateSettings: (newSettings: AppSettings) => void;
   serverStatus: { hasApiKey: boolean; companion: string; modelLive: string } | null;
+  isGuestMode?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -18,6 +26,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   onUpdateSettings,
   serverStatus,
+  isGuestMode = false,
 }) => {
   const [micStatus, setMicStatus] = useState<MicPermissionStatus>('unknown');
   const [isRequestingMic, setIsRequestingMic] = useState<boolean>(false);
@@ -25,6 +34,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   // Owner Voice Profile Enrollment State
   const [voiceProfile, setVoiceProfile] = useState<VoiceProfile | null>(getOwnerVoiceProfile());
   const [isEnrolling, setIsEnrolling] = useState<boolean>(false);
+  const [enrollStep, setEnrollStep] = useState<number>(0);
   const [enrollCountdown, setEnrollCountdown] = useState<number>(3);
   const [enrollStatusMsg, setEnrollStatusMsg] = useState<string>('');
 
@@ -38,10 +48,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen]);
 
   const handleStartEnrollment = async () => {
+    if (isGuestMode) {
+      setEnrollStatusMsg('Public users are forbidden from enrolling or overwriting Mohsin\'s voiceprint.');
+      return;
+    }
+
     try {
       setIsEnrolling(true);
-      setEnrollStatusMsg('Listening... Please speak naturally to Maryam for 3 seconds');
-      setEnrollCountdown(3);
+      const collectedSampleFrames: Array<Array<{ pitchHz: number; spectralCentroid: number }>> = [];
+
+      const samplePrompts = [
+        'Sample 1/3: Speak naturally ("Hello Maryam, it\'s Mohsin here")...',
+        'Sample 2/3: Speak naturally ("Maryam, what tasks do I have today?")...',
+        'Sample 3/3: Speak naturally ("Verify my voiceprint identification profile")...',
+      ];
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
@@ -50,77 +70,71 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       analyser.fftSize = 1024;
       source.connect(analyser);
 
-      const collectedPitches: number[] = [];
-      const collectedCentroids: number[] = [];
+      for (let sIdx = 0; sIdx < 3; sIdx++) {
+        setEnrollStep(sIdx + 1);
+        setEnrollStatusMsg(samplePrompts[sIdx]);
+        setEnrollCountdown(3);
 
-      let secondsLeft = 3;
-      const interval = setInterval(() => {
-        secondsLeft -= 1;
-        setEnrollCountdown(secondsLeft);
-        if (secondsLeft <= 0) {
-          clearInterval(interval);
-        }
-      }, 1000);
+        const currentSampleFrames: Array<{ pitchHz: number; spectralCentroid: number }> = [];
 
-      const sampleData = () => {
-        const data = new Float32Array(analyser.fftSize);
-        analyser.getFloatTimeDomainData(data);
-        const { pitchHz, spectralCentroid } = extractAudioFeatures(data, audioCtx.sampleRate);
+        let countdown = 3;
+        const countdownInterval = setInterval(() => {
+          countdown -= 1;
+          setEnrollCountdown(Math.max(0, countdown));
+        }, 1000);
 
-        if (pitchHz > 60 && pitchHz < 380) {
-          collectedPitches.push(pitchHz);
-        }
-        if (spectralCentroid > 200) {
-          collectedCentroids.push(spectralCentroid);
-        }
-      };
+        const samplerInterval = setInterval(() => {
+          const data = new Float32Array(analyser.fftSize);
+          analyser.getFloatTimeDomainData(data);
+          const features = extractAudioFeatures(data, audioCtx.sampleRate);
+          if (features.pitchHz > 60 && features.pitchHz < 380) {
+            currentSampleFrames.push(features);
+          }
+        }, 80);
 
-      const samplerInterval = setInterval(sampleData, 100);
+        await new Promise((resolve) => setTimeout(resolve, 3100));
 
-      setTimeout(() => {
+        clearInterval(countdownInterval);
         clearInterval(samplerInterval);
-        stream.getTracks().forEach((t) => t.stop());
-        audioCtx.close();
 
-        if (collectedPitches.length > 0) {
-          const avgPitch = Math.round(collectedPitches.reduce((a, b) => a + b, 0) / collectedPitches.length);
-          const minPitch = Math.min(...collectedPitches);
-          const maxPitch = Math.max(...collectedPitches);
-          const avgCentroid = Math.round(
-            collectedCentroids.length > 0
-              ? collectedCentroids.reduce((a, b) => a + b, 0) / collectedCentroids.length
-              : 1800
-          );
+        collectedSampleFrames.push(currentSampleFrames);
+      }
 
-          const newProfile: VoiceProfile = {
-            enrolled: true,
-            minPitchHz: minPitch,
-            maxPitchHz: maxPitch,
-            avgPitchHz: avgPitch,
-            avgSpectralCentroid: avgCentroid,
-            enrolledAt: Date.now(),
-          };
+      stream.getTracks().forEach((t) => t.stop());
+      audioCtx.close();
 
-          saveOwnerVoiceProfile(newProfile);
+      const newProfile = buildMultiSampleProfile(collectedSampleFrames);
+
+      if (newProfile) {
+        const saved = saveOwnerVoiceProfile(newProfile, isGuestMode);
+        if (saved) {
           setVoiceProfile(newProfile);
-          setEnrollStatusMsg(`Enrolled successfully! Baseline pitch: ~${avgPitch}Hz`);
+          setEnrollStatusMsg(`Enrolled successfully! 3 samples captured (Baseline pitch ~${newProfile.avgPitchHz}Hz, std dev ±${newProfile.pitchStdDev}Hz).`);
         } else {
-          setEnrollStatusMsg('Voice sample too quiet or unvoiced. Please try speaking louder.');
+          setEnrollStatusMsg('Voiceprint update blocked by security policy.');
         }
+      } else {
+        setEnrollStatusMsg('Voice samples were too quiet or unvoiced. Please speak clearly into the microphone.');
+      }
 
-        setIsEnrolling(false);
-      }, 3200);
+      setIsEnrolling(false);
+      setEnrollStep(0);
     } catch (err) {
       console.error('Enrollment error:', err);
       setEnrollStatusMsg('Failed to access microphone for voice enrollment.');
       setIsEnrolling(false);
+      setEnrollStep(0);
     }
   };
 
   const handleResetProfile = () => {
-    clearOwnerVoiceProfile();
+    if (isGuestMode) {
+      setEnrollStatusMsg('Public users cannot reset Mohsin\'s voiceprint.');
+      return;
+    }
+    clearOwnerVoiceProfile(isGuestMode);
     setVoiceProfile(null);
-    setEnrollStatusMsg('Voice profile reset to VAD fallback mode.');
+    setEnrollStatusMsg('Voice profile reset.');
   };
 
   const handleRequestMic = async () => {
@@ -329,25 +343,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="flex items-center gap-2">
                 <UserCheck className="w-4 h-4 text-rose-400" />
                 <span className="text-xs font-semibold text-white uppercase tracking-wider">
-                  Owner Voice Profile (Mohsin)
+                  Speaker Verification
                 </span>
               </div>
-              {voiceProfile?.enrolled ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-medium flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> Enrolled
-                </span>
-              ) : (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/50 text-amber-300 font-medium">
-                  VAD Fallback Mode
-                </span>
-              )}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-zinc-400 uppercase font-medium">VOICEPRINT STATUS:</span>
+                {voiceProfile?.enrolled ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> ENROLLED
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/50 text-amber-300 font-semibold">
+                    NOT ENROLLED
+                  </span>
+                )}
+              </div>
             </div>
 
             <p className="text-[11px] text-zinc-300 leading-relaxed">
               {voiceProfile?.enrolled
-                ? `Active voiceprint: Average fundamental pitch ~${voiceProfile.avgPitchHz}Hz (${voiceProfile.minPitchHz}-${voiceProfile.maxPitchHz}Hz range), spectral centroid ~${voiceProfile.avgSpectralCentroid}Hz.`
-                : 'Enroll your voice to allow Maryam to distinguish your voice from background TV or nearby chatter.'}
+                ? `Owner Voiceprint Active: Mohsin enrolled with ${voiceProfile.sampleCount || 3} speech samples. Baseline Pitch ~${voiceProfile.avgPitchHz}Hz (range ${voiceProfile.minPitchHz}-${voiceProfile.maxPitchHz}Hz, std dev ±${voiceProfile.pitchStdDev || 15}Hz), Spectral Centroid ~${voiceProfile.avgSpectralCentroid}Hz.`
+                : 'Enroll 3 natural speech samples from Mohsin to allow Maryam to verify your voice and reject unknown speakers.'}
             </p>
+
+            {isGuestMode && (
+              <div className="p-2 rounded-xl bg-amber-950/40 border border-amber-700/30 text-[10px] text-amber-300 flex items-center gap-1.5">
+                <Lock className="w-3 h-3 flex-shrink-0" />
+                <span>Public user session: Voiceprint enrollment & reset are protected and reserved for Mohsin only.</span>
+              </div>
+            )}
 
             {enrollStatusMsg && (
               <p className="text-[11px] text-rose-300 font-medium bg-rose-950/50 p-2 rounded-xl border border-rose-900/30">
@@ -359,23 +383,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 type="button"
                 onClick={handleStartEnrollment}
-                disabled={isEnrolling}
+                disabled={isEnrolling || isGuestMode}
                 className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
               >
                 {isEnrolling ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Enrolling ({enrollCountdown}s)...</span>
+                    <span>Enrolling Sample {enrollStep}/3 ({enrollCountdown}s)...</span>
                   </>
                 ) : (
                   <>
                     <Mic className="w-3.5 h-3.5" />
-                    <span>{voiceProfile?.enrolled ? 'Re-enroll Voice' : 'Enroll My Voice'}</span>
+                    <span>{voiceProfile?.enrolled ? 'RE-ENROLL VOICE' : 'Enroll Voice (Mohsin Only)'}</span>
                   </>
                 )}
               </button>
 
-              {voiceProfile?.enrolled && (
+              {voiceProfile?.enrolled && !isGuestMode && (
                 <button
                   type="button"
                   onClick={handleResetProfile}
@@ -388,7 +412,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <p className="text-[10px] text-zinc-500 italic">
-              Privacy guarantee: Local acoustic feature extraction only. Raw recordings are never saved.
+              Privacy guarantee: Local acoustic feature extraction only. Temporary raw recordings are discarded immediately after embedding.
             </p>
           </div>
 

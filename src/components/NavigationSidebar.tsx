@@ -1,7 +1,34 @@
 import React from 'react';
-import { Home, MessageSquare, Brain, Calendar, Clock, Compass, Settings, Activity, X, Heart, Shield, Share2 } from 'lucide-react';
+import {
+  Home,
+  MessageSquare,
+  Brain,
+  Calendar,
+  Clock,
+  Compass,
+  Settings,
+  Activity,
+  X,
+  Bot,
+  Shield,
+  Share2,
+  PlusCircle,
+  CalendarClock,
+  Radio,
+} from 'lucide-react';
 
-export type NavTab = 'home' | 'conversations' | 'memories' | 'reminders' | 'routines' | 'tools' | 'settings' | 'social';
+export type NavTab =
+  | 'home'
+  | 'conversations'
+  | 'create_task'
+  | 'scheduled_tasks'
+  | 'connectivity'
+  | 'memories'
+  | 'reminders'
+  | 'routines'
+  | 'tools'
+  | 'settings'
+  | 'social';
 
 interface NavigationSidebarProps {
   isOpen: boolean;
@@ -39,6 +66,9 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
   const navItems: { id: NavTab; label: string; icon: React.FC<{ className?: string }>; action?: () => void }[] = [
     { id: 'home', label: 'Home', icon: Home, action: () => onSelectTab('home') },
     { id: 'conversations', label: 'Conversations', icon: MessageSquare, action: () => onSelectTab('conversations') },
+    { id: 'create_task', label: 'Create Task', icon: PlusCircle, action: () => onSelectTab('create_task') },
+    { id: 'scheduled_tasks', label: 'Scheduled Tasks', icon: CalendarClock, action: () => onSelectTab('scheduled_tasks') },
+    { id: 'connectivity', label: 'Connectivity', icon: Radio, action: () => onSelectTab('connectivity') },
     { id: 'social', label: 'Social Media Manager', icon: Share2, action: onOpenSocial },
     { id: 'memories', label: 'Memories & Journal', icon: Brain, action: onOpenMemory },
     { id: 'reminders', label: 'Reminders & Commitments', icon: Calendar, action: () => onSelectTab('reminders') },
@@ -62,7 +92,7 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
           <div className="flex items-center justify-between pb-5 border-b border-rose-900/20 mb-6">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-rose-600 to-violet-800 p-0.5 shadow-lg shadow-rose-950/50 flex items-center justify-center">
-                <Heart className="w-4 h-4 text-rose-200 fill-rose-300/40" />
+                <Bot className="w-4.5 h-4.5 text-rose-100" />
               </div>
               <div>
                 <h2 className="text-base font-serif font-bold text-white tracking-wide">Maryam</h2>

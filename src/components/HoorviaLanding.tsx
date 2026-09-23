@@ -43,15 +43,27 @@ import { HoorviaLogo } from './HoorviaLogo';
 
 interface HoorviaLandingProps {
   onLoginSuccess: (data: { token: string; user: any; companion: any }) => void;
+  onOwnerAuthenticated?: (data: { token: string; user: any; companion: any }) => void;
   onContinueAsGuestOwner?: () => void;
 }
 
 export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
   onLoginSuccess,
+  onOwnerAuthenticated,
   onContinueAsGuestOwner,
 }) => {
   const [step, setStep] = useState<number>(1);
   const [authMode, setAuthMode] = useState<'register' | 'login'>('register');
+
+  // Owner Portal Authentication State
+  const [showOwnerModal, setShowOwnerModal] = useState<boolean>(false);
+  const [ownerPasskey, setOwnerPasskey] = useState<string>('');
+  const [ownerEmail, setOwnerEmail] = useState<string>('mohsin@hoorvia.net');
+  const [ownerPassword, setOwnerPassword] = useState<string>('');
+  const [ownerGoogleToken, setOwnerGoogleToken] = useState<string>('');
+  const [ownerAuthMethod, setOwnerAuthMethod] = useState<'passkey' | 'password' | 'google'>('passkey');
+  const [ownerError, setOwnerError] = useState<string | null>(null);
+  const [isOwnerSubmitting, setIsOwnerSubmitting] = useState<boolean>(false);
 
   // Form State
   const [selectedType, setSelectedType] = useState<string>('girlfriend');
@@ -329,6 +341,49 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
     }
   };
 
+  const handleOwnerLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOwnerError(null);
+    setIsOwnerSubmitting(true);
+    try {
+      let bodyPayload: any = {};
+      if (ownerAuthMethod === 'passkey') {
+        if (!ownerPasskey.trim()) throw new Error('Owner master passkey is required.');
+        bodyPayload = { passkey: ownerPasskey.trim() };
+      } else if (ownerAuthMethod === 'password') {
+        if (!ownerEmail || !ownerPassword) throw new Error('Owner email and password are required.');
+        bodyPayload = { email: ownerEmail.trim(), password: ownerPassword };
+      } else if (ownerAuthMethod === 'google') {
+        if (!ownerGoogleToken.trim()) {
+          throw new Error('Valid Google ID Token / OAuth Credential is required. For quick access, please switch to Master Passkey.');
+        }
+        bodyPayload = { googleIdToken: ownerGoogleToken.trim() };
+      }
+
+      const res = await fetch('/api/hoorvia/auth/owner-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Owner authorization failed.');
+      }
+
+      setShowOwnerModal(false);
+      if (onOwnerAuthenticated) {
+        onOwnerAuthenticated(data);
+      } else {
+        onLoginSuccess(data);
+      }
+    } catch (err: any) {
+      setOwnerError(err.message || 'Owner authentication failed.');
+    } finally {
+      setIsOwnerSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0A070B] text-slate-100 flex flex-col justify-between selection:bg-rose-500/30 font-sans">
       {/* Background Glow Overlay */}
@@ -364,15 +419,17 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
             </button>
           )}
 
-          {onContinueAsGuestOwner && (
-            <button
-              onClick={onContinueAsGuestOwner}
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-rose-950/50 hover:bg-rose-900/60 text-rose-200 border border-rose-800/40 transition-all flex items-center gap-2"
-            >
-              <Lock className="w-3.5 h-3.5 text-rose-400" />
-              Mohsin Owner Login
-            </button>
-          )}
+          <button
+            onClick={() => {
+              setOwnerError(null);
+              setShowOwnerModal(true);
+            }}
+            className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/30 transition-all flex items-center gap-1.5"
+            title="Mohsin Owner Verification Portal"
+          >
+            <Lock className="w-3.5 h-3.5 text-rose-400" />
+            Owner Portal
+          </button>
         </div>
       </header>
 
@@ -1187,6 +1244,178 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
           <span>Zero Memory Leakage</span>
         </div>
       </footer>
+
+      {/* MOHSIN OWNER ACCESS PORTAL MODAL */}
+      {showOwnerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="w-full max-w-md bg-[#0D0811] border border-rose-900/40 rounded-3xl p-6 md:p-8 shadow-2xl relative">
+            <button
+              onClick={() => setShowOwnerModal(false)}
+              className="absolute top-5 right-5 p-2 rounded-full text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 rounded-2xl bg-rose-950/60 border border-rose-700/40 text-rose-300">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white tracking-wide">Mohsin Owner Portal</h3>
+                <p className="text-xs text-rose-300/70">Authoritative Server Identity Verification</p>
+              </div>
+            </div>
+
+            {ownerError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-950/60 border border-red-800/60 text-red-200 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                <span>{ownerError}</span>
+              </div>
+            )}
+
+            {/* Auth Method Tabs */}
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-black/50 border border-rose-950 rounded-xl mb-5">
+              <button
+                type="button"
+                onClick={() => {
+                  setOwnerAuthMethod('passkey');
+                  setOwnerError(null);
+                }}
+                className={`py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  ownerAuthMethod === 'passkey'
+                    ? 'bg-rose-950 text-rose-200 border border-rose-700/40'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Passkey
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOwnerAuthMethod('google');
+                  setOwnerError(null);
+                }}
+                className={`py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  ownerAuthMethod === 'google'
+                    ? 'bg-rose-950 text-rose-200 border border-rose-700/40'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Google Sign-In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOwnerAuthMethod('password');
+                  setOwnerError(null);
+                }}
+                className={`py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  ownerAuthMethod === 'password'
+                    ? 'bg-rose-950 text-rose-200 border border-rose-700/40'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Credentials
+              </button>
+            </div>
+
+            <form onSubmit={handleOwnerLoginSubmit} className="space-y-4">
+              {ownerAuthMethod === 'passkey' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Owner Master Passkey / Secret
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={ownerPasskey}
+                    onChange={(e) => setOwnerPasskey(e.target.value)}
+                    placeholder="Enter Mohsin master key..."
+                    className="w-full px-4 py-3 rounded-xl bg-black/60 border border-rose-900/40 text-white text-sm font-mono focus:outline-none focus:border-rose-500"
+                    autoFocus
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    Protected by server-side verification and constant-time secret evaluation.
+                  </p>
+                </div>
+              )}
+
+              {ownerAuthMethod === 'google' && (
+                <div className="space-y-3 py-2">
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Canonical Owner accounts (<span className="text-rose-300 font-mono">mohsin@hoorvia.net</span> or <span className="text-rose-300 font-mono">friskymohsin55@gmail.com</span>) are verified server-side against Google Identity Services.
+                  </p>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Google OAuth ID Token / Credential
+                    </label>
+                    <input
+                      type="text"
+                      value={ownerGoogleToken}
+                      onChange={(e) => setOwnerGoogleToken(e.target.value)}
+                      placeholder="Paste Google JWT / Credential token..."
+                      className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-rose-900/40 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-black/40 border border-rose-950 text-[11px] text-slate-400">
+                    💡 Tip: For faster direct access without pasting Google tokens, use the <strong className="text-rose-300 font-semibold cursor-pointer" onClick={() => setOwnerAuthMethod('passkey')}>Passkey</strong> or <strong className="text-rose-300 font-semibold cursor-pointer" onClick={() => setOwnerAuthMethod('password')}>Credentials</strong> tab.
+                  </div>
+                </div>
+              )}
+
+              {ownerAuthMethod === 'password' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Owner Email</label>
+                    <input
+                      type="email"
+                      required
+                      value={ownerEmail}
+                      onChange={(e) => setOwnerEmail(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-rose-900/40 text-white text-sm focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Password</label>
+                    <input
+                      type="password"
+                      required
+                      value={ownerPassword}
+                      onChange={(e) => setOwnerPassword(e.target.value)}
+                      placeholder="••••••••••••"
+                      className="w-full px-4 py-2.5 rounded-xl bg-black/60 border border-rose-900/40 text-white text-sm focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowOwnerModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 text-slate-300 text-xs font-medium hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isOwnerSubmitting}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white text-xs font-bold shadow-lg shadow-rose-950/60 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isOwnerSubmitting ? (
+                    'Verifying Owner Rights...'
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4" />
+                      Authenticate as Owner
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

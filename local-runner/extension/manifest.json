@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Maryam Companion Bridge",
+  "version": "2.0.0",
+  "description": "Maryam Automation Companion Bridge for authorized Mohsin Chrome Profiles (Phase 2 Full DOM Interaction)",
+  "permissions": [
+    "nativeMessaging",
+    "alarms",
+    "tabs",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Maryam Companion Bridge",
+    "default_popup": "popup.html"
+  }
+}

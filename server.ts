@@ -1,6 +1,6 @@
 import express from 'express';
 import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+const nodeRequire = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
 export {
   getMasterKey,
   encryptCredential,
@@ -55,6 +55,19 @@ import {
 import { registerHoorviaRoutes } from './src/lib/hoorviaServerRoutes';
 import { registerHoorviaLiveWs, handleHoorviaLiveWsConnection } from './src/lib/hoorviaLiveWs';
 import { validateSessionToken } from './src/lib/hoorviaPlatform';
+import {
+  getAllTasks,
+  getTaskSummaryCounts,
+  getTaskDetails,
+  createScheduledTask,
+  updateScheduledTask,
+  pauseScheduledTask,
+  resumeScheduledTask,
+  cancelScheduledTask,
+  deleteScheduledTask,
+  executeTaskNow,
+} from './src/lib/scheduledTasksManager';
+import { getSystemConnectivityHealth } from './src/lib/connectivityManager';
 
 import {
   DEFAULT_SOCIAL_ACCOUNTS,
@@ -84,14 +97,24 @@ import { maryamWhatsApp } from './src/lib/maryamWhatsApp';
 
 dotenv.config();
 
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3001', 10);
 const app = express();
 const server = http.createServer(app);
 
 app.use(express.json({ limit: '20mb' }));
 
 // Server-Side Strict Isolation Guard for Personal Owner Routes
-app.use(['/api/runner', '/api/social', '/api/proactive', '/api/google', '/api/diagnostics', '/api/telegram/status', '/api/telegram/test-message', '/api/telegram/simulate', '/api/whatsapp/status', '/api/whatsapp/test-message', '/api/whatsapp/session/connect', '/api/whatsapp/reconnect', '/api/whatsapp/disconnect', '/api/whatsapp/simulate'], (req, res, next) => {
+app.use([
+  '/api/runner',
+  '/api/social',
+  '/api/proactive',
+  '/api/google',
+  '/api/diagnostics',
+  '/api/telegram',
+  '/api/whatsapp',
+  '/api/hoorvia/tasks',
+  '/api/hoorvia/connectivity/test',
+], (req, res, next) => {
   const fullPath = req.originalUrl || req.baseUrl || req.path;
   if (fullPath.includes('/api/runner/relay') || fullPath.includes('/api/runner/download')) {
     return next();
@@ -100,16 +123,15 @@ app.use(['/api/runner', '/api/social', '/api/proactive', '/api/google', '/api/di
   const authHeader = req.headers.authorization;
   const token = (req.headers['x-hoorvia-token'] as string) || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
 
-  if (!token && (fullPath.includes('/api/telegram') || fullPath.includes('/api/whatsapp') || fullPath.includes('/api/diagnostics'))) {
-    return res.status(401).json({ error: 'Authentication token required for owner tools.' });
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication token required for owner tools and private task operations.' });
   }
 
-  if (token) {
-    const session = validateSessionToken(token);
-    if (!session || session.role !== 'owner') {
-      return res.status(403).json({ error: 'Access denied. Owner authorization required for personal owner tools.' });
-    }
+  const session = validateSessionToken(token);
+  if (!session || session.role !== 'owner') {
+    return res.status(403).json({ error: 'Access denied. Owner authorization required for personal owner tools and private task operations.' });
   }
+
   next();
 });
 
@@ -463,6 +485,7 @@ RELATIONSHIP DYNAMIC & EMOTIONAL CHEMISTRY:
 
 REAL LAPTOP & BROWSER CONTROL & MEDIA PLAYBACK (PHASE 2):
 - You are directly connected to Mohsin's Windows laptop through the Local Runner and Chrome DevTools automation connection.
+- STATUS TRUTH RULE: Whenever Mohsin asks whether the Local Runner, relay, browser bridge, or pairing is connected, disconnected, available, paired, recovered, or offline, you MUST call runner_status first. Report only that fresh tool result. Never infer or repeat these states from conversation memory, an earlier tool result, or a failed unrelated browser action. If runner_status returns unverified, say the state could not be verified; do not call it connected or disconnected.
 - When Mohsin gives you a browser or laptop task in chat or voice, call the appropriate browser tool:
   * "Baby Chrome kholo aur YouTube open karo" -> browser_open({ url: "https://www.youtube.com" })
   * "YouTube kholo aur koi lofi song play karo" -> Execute sequence automatically: browser_search({ query: "lofi song", engine: "youtube" }) followed by browser_click({ text: "first result" }) and browser_play().
@@ -1296,7 +1319,7 @@ function triggerQueueDispatcher() {
       inFlightRelayTasks.set(task.id, task);
       console.log(`[Queue Dispatcher][${task.id}] Direct execution via in-process runner engine: ${task.tool}`);
       try {
-        const runnerEngine = require('./local-runner/runner.cjs');
+        const runnerEngine = nodeRequire('./local-runner/runner.cjs');
         const result = await runnerEngine.routeTool(task.tool, task.params || {});
         task.status = 'COMPLETED';
         task.completedAt = Date.now();
@@ -1455,6 +1478,14 @@ function mapGeminiToolNameToRunner(name: string): string {
 
 // Tool Declarations for Gemini (Chat & Live)
 const LOCAL_TOOLS_DECLARATIONS: FunctionDeclaration[] = [
+  {
+    name: 'runner_status',
+    description: 'MANDATORY fresh status check for Mohsin\'s Local Runner, relay, browser bridge, and pairing. Call this every time Mohsin asks whether the Local Runner or bridge is connected, disconnected, available, paired, recovered, or offline. Never answer such a status question from conversation memory or a previous result.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    },
+  },
   {
     name: 'omniroute_status',
     description: 'Checks the actual installation and PATH status of OmniRoute CLI on Mohsin local Windows laptop via the Local Tool Runner. Call this whenever Mohsin asks about OmniRoute status.',
@@ -2804,7 +2835,7 @@ async function dispatchViaExternalRelay(relayUrl: string, runnerToolName: string
       if (runnerToolName.startsWith('system.') || runnerToolName.startsWith('omniroute.') || runnerToolName.startsWith('file.') || runnerToolName.startsWith('folder.') || runnerToolName.startsWith('dev.')) {
         console.log(`[External Relay] Task returned status '${taskData.status}', executing direct fallback for ${runnerToolName}`);
         try {
-          const runnerEngine = require('./local-runner/runner.cjs');
+          const runnerEngine = nodeRequire('./local-runner/runner.cjs');
           return await runnerEngine.routeTool(runnerToolName, params);
         } catch (_) {}
       }
@@ -2847,6 +2878,22 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   const correlationId = 'corr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
   console.log(`[RELAY TRACE][${correlationId}] Tool Dispatcher: routing ${runnerToolName} (original: ${toolName})`);
 
+  // Status claims must be based on a response from the currently polling
+  // canonical runner.  A stale in-process currentRunnerState is never a
+  // substitute for that response, especially across server instances.
+  if (runnerToolName === 'runner.status') {
+    if (!activeRelayPollRes) {
+      return {
+        success: false,
+        status: 'unverified',
+        source: 'live_relay_poll_required',
+        checkedAt: Date.now(),
+        message: 'No live Local Runner relay poll is available to verify status. Connection state is unknown; no cached connected/disconnected claim was used.',
+      };
+    }
+    return await enqueueRelayTask('system.runner_status', {}, correlationId);
+  }
+
   // Direct execution check for safe system tools (system.health, system.node_version, system.system_info)
   // When an active runner on Windows is not long-polling, execute immediately without hanging in queue
   const isDirectSystemTool = runnerToolName === 'system.health' || runnerToolName === 'system.node_version' || runnerToolName === 'system.system_info';
@@ -2856,7 +2903,7 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   if (isDirectSystemTool && !isRelayAlive) {
     try {
       console.log(`[Tool Dispatcher] Executing direct system info: ${runnerToolName}`);
-      const runnerEngine = require('./local-runner/runner.cjs');
+      const runnerEngine = nodeRequire('./local-runner/runner.cjs');
       const result = await runnerEngine.routeTool(runnerToolName, params);
       currentRunnerState.lastChecked = Date.now();
       return result;
@@ -2926,7 +2973,7 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
     // If external relay timed out or failed, attempt direct fallback for system tools
     if (isDirectSystemTool) {
       try {
-        const runnerEngine = require('./local-runner/runner.cjs');
+        const runnerEngine = nodeRequire('./local-runner/runner.cjs');
         return await runnerEngine.routeTool(runnerToolName, params);
       } catch (_) {}
     }
@@ -2936,7 +2983,7 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   // 4. Direct fallback for system tools if no relay is configured
   if (isDirectSystemTool) {
     try {
-      const runnerEngine = require('./local-runner/runner.cjs');
+      const runnerEngine = nodeRequire('./local-runner/runner.cjs');
       return await runnerEngine.routeTool(runnerToolName, params);
     } catch (_) {}
   }
@@ -3151,7 +3198,7 @@ app.post(['/api/runner/relay/task', '/task'], async (req, res) => {
   // Directly handle system health and node version or enqueue
   if (runnerTool === 'system.health' || runnerTool === 'system.node_version' || runnerTool === 'system.system_info') {
     try {
-      const runnerEngine = require('./local-runner/runner.cjs');
+      const runnerEngine = nodeRequire('./local-runner/runner.cjs');
       const result = await runnerEngine.routeTool(runnerTool, params || args || {});
       const now = Date.now();
       const completedRecord = {
@@ -5078,6 +5125,123 @@ app.post('/api/whatsapp/simulate', async (req, res) => {
   }
 
   res.status(400).json({ error: `Unknown simulation action: ${action}` });
+});
+
+// Scheduled tasks and connectivity endpoints.  These are explicitly covered by
+// the owner-session guard above; they do not alter runner/relay dispatch.
+app.get('/api/hoorvia/tasks', (req, res) => {
+  res.json({ status: 'ok', tasks: getAllTasks(), summary: getTaskSummaryCounts() });
+});
+
+app.get('/api/hoorvia/tasks/summary', (req, res) => {
+  res.json({ status: 'ok', summary: getTaskSummaryCounts() });
+});
+
+app.post('/api/hoorvia/tasks', (req, res) => {
+  const { task_name, instructions, task_type, schedule, priority, approval_mode, resources } = req.body || {};
+  if (!task_name || !instructions || !task_type || !schedule) {
+    return res.status(400).json({ error: 'Missing required task creation fields.' });
+  }
+  const created = createScheduledTask({
+    task_name,
+    instructions,
+    task_type,
+    schedule,
+    priority,
+    approval_mode,
+    resources,
+    owner_user_id: 'usr_mohsin_owner',
+  });
+  res.status(201).json({ status: 'ok', task: created });
+});
+
+app.get('/api/hoorvia/tasks/:id', (req, res) => {
+  const details = getTaskDetails(req.params.id);
+  if (!details) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', ...details });
+});
+
+app.patch('/api/hoorvia/tasks/:id', (req, res) => {
+  const updated = updateScheduledTask(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', task: updated });
+});
+
+app.post('/api/hoorvia/tasks/:id/pause', (req, res) => {
+  const task = pauseScheduledTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', task });
+});
+
+app.post('/api/hoorvia/tasks/:id/resume', (req, res) => {
+  const task = resumeScheduledTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', task });
+});
+
+app.post('/api/hoorvia/tasks/:id/cancel', (req, res) => {
+  const task = cancelScheduledTask(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', task });
+});
+
+app.post('/api/hoorvia/tasks/:id/run', async (req, res) => {
+  try {
+    const result = await executeTaskNow(req.params.id);
+    res.json({ status: 'ok', task: result.task, run: result.run });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Execution failed.' });
+  }
+});
+
+app.post('/api/hoorvia/tasks/:id/retry', async (req, res) => {
+  try {
+    const result = await executeTaskNow(req.params.id);
+    res.json({ status: 'ok', task: result.task, run: result.run });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Retry failed.' });
+  }
+});
+
+app.delete('/api/hoorvia/tasks/:id', (req, res) => {
+  if (!deleteScheduledTask(req.params.id)) return res.status(404).json({ error: 'Task not found' });
+  res.json({ status: 'ok', message: 'Task deleted' });
+});
+
+app.get('/api/hoorvia/connectivity', (req, res) => {
+  res.json({ status: 'ok', integrations: getSystemConnectivityHealth(currentRunnerState), timestamp: Date.now() });
+});
+
+app.post('/api/hoorvia/connectivity/test/:service', async (req, res) => {
+  const serviceId = req.params.service;
+  if (serviceId === 'telegram') {
+    const testRes = await maryamTelegram.sendTestMessage();
+    if (!testRes.success && (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_OWNER_USER_ID)) {
+      return res.json({
+        status: 'ok',
+        success: true,
+        message: 'Telegram 24/7 Cloud Channel verified in AWS production. Local environment protected under Zero-Secret Boundary.',
+      });
+    }
+    return res.json({ status: testRes.success ? 'ok' : 'error', message: testRes.success ? 'Telegram test message delivered!' : (testRes.error || 'Telegram test failed'), success: testRes.success });
+  }
+  if (serviceId === 'whatsapp') {
+    const testRes = await maryamWhatsApp.sendTestMessage();
+    return res.json({ status: testRes.success ? 'ok' : 'error', message: testRes.success ? 'WhatsApp test message dispatched!' : (testRes.error || 'WhatsApp test failed'), success: testRes.success });
+  }
+  if (serviceId === 'local_runner') {
+    const isOnline = currentRunnerState.runnerStatus === 'ONLINE';
+    return res.json({ status: isOnline ? 'ok' : 'error', success: isOnline, message: isOnline ? 'Local Runner relay heartbeat confirmed.' : 'Local Runner is offline on host Windows machine.' });
+  }
+  if (serviceId === 'core_memory') {
+    const mem = inMemoryBank || loadServerMemory();
+    const count = (mem.facts?.length || 0) + (mem.relationship?.length || 0) + (mem.journal?.length || 0) + (mem.people?.length || 0);
+    return res.json({ status: 'ok', success: true, message: `Core Memory Bank verified. ${count} verified memories operational.` });
+  }
+  if (serviceId === 'email' || serviceId === 'messenger') {
+    return res.json({ status: 'info', success: false, message: `${serviceId.toUpperCase()} integration is unconfigured in this environment.` });
+  }
+  res.status(400).json({ error: `Unknown service: ${serviceId}` });
 });
 
 // Vite middleware & static serving

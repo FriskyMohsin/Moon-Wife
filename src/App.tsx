@@ -39,6 +39,10 @@ import { ConversationView } from './components/ConversationView';
 import { ControlsBar } from './components/ControlsBar';
 import { MemoryModal } from './components/MemoryModal';
 import { SettingsModal } from './components/SettingsModal';
+import { CreateTaskView } from './components/CreateTaskView';
+import { ScheduledTasksView } from './components/ScheduledTasksView';
+import { ConnectivityView } from './components/ConnectivityView';
+
 import { ToolRunnerModal } from './components/ToolRunnerModal';
 import { SocialDashboardModal } from './components/SocialDashboardModal';
 import { TimingDiagnosticsModal } from './components/TimingDiagnosticsModal';
@@ -54,7 +58,17 @@ import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
 export default function App() {
   // Public Multi-User Companion Platform State
   const [platformMode, setPlatformMode] = useState<'hoorvia' | 'mohsin_maryam'>(() => {
-    return (localStorage.getItem('hoorvia_platform_mode') as any) || 'mohsin_maryam';
+    const saved = localStorage.getItem('hoorvia_platform_mode');
+    const userStr = localStorage.getItem('hoorvia_user_data');
+    if (saved === 'mohsin_maryam' && userStr) {
+      try {
+        const u = JSON.parse(userStr);
+        if (u && u.role === 'owner' && u.id === 'usr_mohsin_owner') {
+          return 'mohsin_maryam';
+        }
+      } catch {}
+    }
+    return 'hoorvia';
   });
   const [hoorviaToken, setHoorviaToken] = useState<string | null>(() => {
     return localStorage.getItem('hoorvia_user_token');
@@ -1200,23 +1214,32 @@ export default function App() {
     localStorage.removeItem('hoorvia_companion_data');
   };
 
-  // Render Owner Admin Center if opened
-  if (showOwnerAdmin) {
+  // Verify securely authenticated owner identity
+  const isVerifiedOwner = Boolean(
+    hoorviaToken &&
+    hoorviaUser &&
+    hoorviaUser.role === 'owner' &&
+    hoorviaUser.id === 'usr_mohsin_owner'
+  );
+
+  // Render Owner Admin Center if explicitly opened (only if verified)
+  if (showOwnerAdmin && isVerifiedOwner) {
     return (
       <HoorviaOwnerAdmin
-        token={hoorviaToken || 'owner_secret_dev_session'}
+        token={hoorviaToken!}
         onClose={() => setShowOwnerAdmin(false)}
       />
     );
   }
 
-  // Render Public Hoorvia Platform if in 'hoorvia' mode
-  if (platformMode === 'hoorvia') {
+  // Render Public Hoorvia Platform if in 'hoorvia' mode OR if not verified owner
+  if (platformMode === 'hoorvia' || !isVerifiedOwner) {
     if (!hoorviaToken || !hoorviaUser) {
       return (
         <HoorviaLanding
           onLoginSuccess={handleHoorviaLoginSuccess}
-          onContinueAsGuestOwner={() => {
+          onOwnerAuthenticated={(data) => {
+            handleHoorviaLoginSuccess(data);
             setPlatformMode('mohsin_maryam');
             localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam');
           }}
@@ -1339,10 +1362,10 @@ export default function App() {
         />
 
         {/* Center & Right Columns Container */}
-        <main className="flex-1 min-h-0 p-0 sm:p-3 md:p-4 flex flex-col xl:flex-row gap-0 xl:gap-4 overflow-y-auto xl:overflow-hidden h-full">
+        <main className="flex-1 min-h-0 p-1 sm:p-3 md:p-4 flex flex-col xl:flex-row gap-2 xl:gap-4 overflow-y-auto h-full">
           {/* Column 2: MARYAM CHARACTER PROMINENCE (Home Tab Only) */}
           {activeTab === 'home' && (
-            <section className="flex-[1.85] min-h-0 xl:w-[66%] h-[52vh] xl:h-full flex flex-col justify-center shrink-0">
+            <section className="flex-[1.85] min-h-[380px] xl:w-[66%] min-h-0 xl:h-full flex flex-col justify-center shrink-0">
               <MaryamCharacter
                 voiceState={voiceState}
                 emotion={emotion}
@@ -1355,7 +1378,7 @@ export default function App() {
           )}
 
           {/* Column 3: CONVERSATION PANEL / TAB CONTENT (Full width when not on Home) */}
-          <section className={`flex-1 min-h-0 ${activeTab === 'home' ? 'xl:w-[34%] h-[min(560px,48vh)] xl:h-full' : 'w-full h-full'} flex flex-col justify-between overflow-hidden`}>
+          <section className={`flex-1 min-h-[460px] xl:min-h-0 ${activeTab === 'home' ? 'xl:w-[34%] xl:h-full' : 'w-full h-full'} flex flex-col justify-between overflow-y-auto`}>
             {/* Live Camera Preview Widget */}
             {isCameraActive && (
               <div className="px-4 py-2 shrink-0 border-b border-rose-900/20 bg-black/40 rounded-t-3xl">
@@ -1428,6 +1451,28 @@ export default function App() {
 
             {activeTab === 'reminders' && <RemindersPanel />}
             {activeTab === 'routines' && <RoutinesPanel />}
+
+            {activeTab === 'create_task' && (
+              <CreateTaskView
+                onTaskCreated={() => setActiveTab('scheduled_tasks')}
+                onNavigateToScheduled={() => setActiveTab('scheduled_tasks')}
+                authToken={hoorviaToken || undefined}
+              />
+            )}
+
+            {activeTab === 'scheduled_tasks' && (
+              <ScheduledTasksView
+                onNavigateToCreate={() => setActiveTab('create_task')}
+                authToken={hoorviaToken || undefined}
+              />
+            )}
+
+            {activeTab === 'connectivity' && (
+              <ConnectivityView
+                runnerState={runnerState}
+                authToken={hoorviaToken || undefined}
+              />
+            )}
           </section>
         </main>
       </div>

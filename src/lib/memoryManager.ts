@@ -153,23 +153,26 @@ export function saveMemoryBank(memory: MemoryBank): void {
     diagnosticsRecord.lastWriteLatencyMs = writeLatency;
     diagnosticsRecord.lastWriteError = null;
 
-    // Asynchronously synchronize with server disk storage
-    const syncPayload = JSON.stringify(memory);
-    fetch('/api/memory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: syncPayload,
-    })
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`Server status ${res.status}`);
-        }
+    // Asynchronously synchronize with server storage
+    if (typeof window !== 'undefined' && window.location) {
+      const syncPayload = JSON.stringify(memory);
+      const url = new URL('/api/memory', window.location.origin).toString();
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: syncPayload,
       })
-      .catch((err) => {
-        diagnosticsRecord.lastWriteStatus = 'FAILED';
-        diagnosticsRecord.lastWriteError = String(err.message || err);
-        console.warn('[Memory] Background server sync warning:', err);
-      });
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error(`Server status ${res.status}`);
+          }
+        })
+        .catch((err) => {
+          diagnosticsRecord.lastWriteStatus = 'FAILED';
+          diagnosticsRecord.lastWriteError = String(err.message || err);
+          console.warn('[Memory] Background server sync warning:', err);
+        });
+    }
   } catch (e) {
     diagnosticsRecord.lastWriteStatus = 'FAILED';
     diagnosticsRecord.lastWriteError = String(e);
