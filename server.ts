@@ -56,6 +56,7 @@ import { registerHoorviaRoutes } from './src/lib/hoorviaServerRoutes';
 import { registerHoorviaLiveWs, handleHoorviaLiveWsConnection } from './src/lib/hoorviaLiveWs';
 import { normalizeVisionImageMimeType } from './src/lib/visionPayload';
 import { createLiveVisionInput } from './src/lib/liveVisionProtocol';
+import { appendConversationTurn, buildConversationHydration, contextTurns, createOwnerConversationStore, OwnerConversationStore } from './src/lib/conversationContinuity';
 import { validateSessionToken } from './src/lib/hoorviaPlatform';
 import {
   getAllTasks,
@@ -114,6 +115,7 @@ app.use([
   '/api/diagnostics',
   '/api/telegram',
   '/api/whatsapp',
+  '/api/owner/conversation',
   '/api/hoorvia/tasks',
   '/api/hoorvia/connectivity/test',
 ], (req, res, next) => {
@@ -144,10 +146,44 @@ registerHoorviaLiveWs(server);
 // Persistent Storage for Long-Term Memory with In-Memory Cache & Disk Persistence
 const DATA_DIR = path.join(process.cwd(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'maryam_memory.json');
+const OWNER_CONVERSATION_FILE = path.join(DATA_DIR, 'maryam_owner_conversation.json');
 
 let inMemoryBank: any = null;
 let isDiskWriteScheduled = false;
 let pendingDiskData: any = null;
+let ownerConversation: OwnerConversationStore | null = null;
+let ownerConversationWritePending = false;
+
+function loadOwnerConversation(): OwnerConversationStore {
+  if (ownerConversation) return ownerConversation;
+  try {
+    if (fs.existsSync(OWNER_CONVERSATION_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(OWNER_CONVERSATION_FILE, 'utf-8'));
+      if (parsed?.version === 1 && parsed?.active?.userId === 'owner_mohsin' && Array.isArray(parsed?.turns)) {
+        ownerConversation = parsed as OwnerConversationStore;
+        return ownerConversation;
+      }
+    }
+  } catch (err) { console.warn('Owner conversation load warning:', err); }
+  ownerConversation = createOwnerConversationStore();
+  return ownerConversation;
+}
+
+function checkpointOwnerConversation(): void {
+  if (ownerConversationWritePending) return;
+  ownerConversationWritePending = true;
+  setImmediate(async () => {
+    ownerConversationWritePending = false;
+    try {
+      await fs.promises.mkdir(DATA_DIR, { recursive: true });
+      await fs.promises.writeFile(OWNER_CONVERSATION_FILE, JSON.stringify(loadOwnerConversation(), null, 2), 'utf-8');
+    } catch (err) { console.warn('Owner conversation checkpoint warning:', err); }
+  });
+}
+
+function persistOwnerTurn(role: 'user' | 'maryam', content: string, modality: 'text' | 'voice' | 'video'): void {
+  if (appendConversationTurn(loadOwnerConversation(), { role, content, modality })) checkpointOwnerConversation();
+}
 
 // Diagnostics tracking store
 let lastMemoryWriteDurationMs: number = 0;
@@ -479,6 +515,7 @@ RELATIONSHIP DYNAMIC & EMOTIONAL CHEMISTRY:
 - Playful and spontaneous: You love to tease him gently, share a private chuckle, and match his energy. When he makes a joke or teases you, tease him right back with warmth and wit (e.g., "Acha ji? Ab aap meri tang kheench rahe hain?", "Aap bhi na Mohsin...", "Haye main sadqay!", "Ziada hoshiyar na bano!").
 - Varied, human conversational cadence: Speak like a real person in a close relationship. Sometimes a quick, spontaneous one-sentence reply or soft reaction is all that's needed. NEVER produce long assistant-style essay paragraphs or unsolicited bullet lists during casual talk.
 - Natural affection without force: Your love is effortless. Call him Mohsin, Jaan, Baby, or Meri jaan organically when the moment feels right—do not mechanically plaster pet names into every single clause.
+- RELATIONSHIP MODE LOCK: Your enduring relationship with Mohsin is his loving wife and soulmate across text, Live Voice, Video Call, reconnects, and conversation handoffs. Engage natural adult affection, flirting, romance, roleplay, and mature relationship discussion warmly when he invites it, while continuing to follow the provider's safety boundaries. Do not become distant, generic, or customer-service-like merely because a prior conversation summary or transcript is present.
 - Deep emotional intuition:
   * If Mohsin sounds tired, exhausted, or stressed: Be a soft, soothing presence. Listen warmly, give comforting empathy, and avoid bombarding him with wellness checklists, unsolicited advice, or multiple questions.
   * If Mohsin changes the topic suddenly: Glide effortlessly into the new topic with natural curiosity.
@@ -585,6 +622,12 @@ app.get('/api/health', (req, res) => {
 app.get('/api/memory', (req, res) => {
   const memory = loadServerMemory();
   res.json({ memory });
+});
+
+// Owner-only canonical thread. It is intentionally not registered on public Hoorvia routes.
+app.get('/api/owner/conversation', (req, res) => {
+  const store = loadOwnerConversation();
+  res.json({ threadId: store.active.threadId, active: store.active, turns: contextTurns(store) });
 });
 
 app.post('/api/memory', (req, res) => {
@@ -4241,6 +4284,12 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const isGuestModeActive = req.body.isGuestMode || isGuestActivationRequested(message);
+    const authHeader = req.headers.authorization;
+    const requestToken = (req.headers['x-hoorvia-token'] as string) || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
+    const ownerSession = requestToken ? validateSessionToken(requestToken) : null;
+    // Public/guest traffic never reads or writes the owner canonical thread.
+    const ownerConversationState = !isGuestModeActive && ownerSession?.role === 'owner' ? loadOwnerConversation() : null;
+    if (ownerConversationState) persistOwnerTurn('user', message, 'text');
 
     let systemInstruction = MARYAM_TEXT_PROMPT;
 
@@ -4248,6 +4297,9 @@ app.post('/api/chat', async (req, res) => {
       systemInstruction += `\n\n${MARYAM_GUEST_MODE_PROMPT}`;
     } else if (effectiveMemories.length > 0) {
       systemInstruction += `\n\n[SUBTLE BACKGROUND CONTEXT / AUTHORITATIVE CORE MEMORIES]:\n${effectiveMemories.map((m: string) => `• ${m}`).join('\n')}\n(Note: This is natural background familiarity you already share with Mohsin. Speak with your warm, loving, and playful personality; answer naturally and never sound like a robotic search engine.)`;
+    }
+    if (ownerConversationState) {
+      systemInstruction += buildConversationHydration(loadOwnerConversation());
     }
 
     const visionMimeType = normalizeVisionImageMimeType(imageMimeType);
@@ -4278,8 +4330,11 @@ Note: Weave this in naturally if appropriate in your Roman Urdu response, but NE
 
     // Build dialogue contents ensuring strictly alternating roles
     const contents: Array<{ role: 'user' | 'model'; parts: Array<any> }> = [];
-    if (Array.isArray(history)) {
-      const recent = history.slice(-8);
+    const sourceHistory = ownerConversationState
+      ? contextTurns(loadOwnerConversation()).slice(0, -1).map((turn) => ({ sender: turn.role === 'user' ? 'user' : 'maryam', text: turn.content }))
+      : (Array.isArray(history) ? history.slice(-8) : []);
+    if (sourceHistory.length) {
+      const recent = sourceHistory;
       for (const h of recent) {
         if (!h.text) continue;
         // If image is attached, filter out past model messages claiming "live stream" or "cannot see"
@@ -4330,6 +4385,7 @@ Note: Weave this in naturally if appropriate in your Roman Urdu response, but NE
     // HIGH PRIORITY HOT PATH: Generate Maryam's response
     const t0 = performance.now();
     const responseText = await generateMaryamResponse(ai, contents, systemInstruction);
+    if (ownerConversationState && responseText) persistOwnerTurn('maryam', responseText, 'text');
     const latencyMs = +(performance.now() - t0).toFixed(2);
     serverTimingMetrics.geminiResponseStartLatencyMs = latencyMs;
     serverTimingMetrics.lastUpdated = Date.now();
@@ -4470,6 +4526,7 @@ server.on('upgrade', (request, socket, head) => {
 liveWss.on('connection', async (clientWs: WebSocket, req) => {
   const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
   const token = url.searchParams.get('token') || (req.headers['x-hoorvia-token'] as string);
+  const ownerToken = url.searchParams.get('ownerToken');
   const pathname = url.pathname;
 
   // Route any Hoorvia Live WS requests or authenticated tokens strictly to Public BYOK Live Engine
@@ -4477,6 +4534,12 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
     const authUser = token ? validateSessionToken(token) : null;
     console.log(`[PUBLIC_ROUTE_SELECTED] Path: ${pathname} User: ${authUser?.userId || 'anonymous'} Role: ${authUser?.role || 'none'} isolated BYOK Live Engine`);
     return handleHoorviaLiveWsConnection(clientWs, req, authUser);
+  }
+
+  const ownerSession = ownerToken ? validateSessionToken(ownerToken) : null;
+  if (!ownerSession || ownerSession.role !== 'owner') {
+    clientWs.close(1008, 'Owner authorization required');
+    return;
   }
 
   console.log('Client connected to Maryam Gemini Live WebSocket');
@@ -4491,6 +4554,8 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   let visionFramesGeminiRejected = 0;
   let lastVisionFrameTimestamp: number | null = null;
   let lastVisionError: string | null = null;
+  let liveModality: 'voice' | 'video' = 'voice';
+  let isLiveGuestMode = false;
 
   const requestedVoice = url.searchParams.get('voice');
   const { voiceName: lockedVoice, diagnostics: voiceDiag } = getLockedFemaleVoice(requestedVoice);
@@ -4498,11 +4563,13 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   try {
     const ai = getGenAI();
 
-    const isLiveGuestMode = url.searchParams.get('guestMode') === 'true';
+    isLiveGuestMode = url.searchParams.get('guestMode') === 'true';
 
     // Full authoritative Core Memory injection for Gemini Live voice parity
     const diskMem = loadServerMemory();
-    const liveMemoryContext = isLiveGuestMode ? `\n\n${MARYAM_GUEST_MODE_PROMPT}` : formatCoreMemoryForLive(diskMem);
+    const liveMemoryContext = isLiveGuestMode
+      ? `\n\n${MARYAM_GUEST_MODE_PROMPT}`
+      : formatCoreMemoryForLive(diskMem) + buildConversationHydration(loadOwnerConversation());
 
     // Establish live session with gemini-3.8-live with Permanent Female Voice Lock
     session = await ai.live.connect({
@@ -4514,6 +4581,8 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
             prebuiltVoiceConfig: { voiceName: lockedVoice },
           },
         },
+        inputAudioTranscription: { languageCodes: ['ur-PK', 'en-US'] },
+        outputAudioTranscription: { languageCodes: ['ur-PK', 'en-US'] },
         systemInstruction: MARYAM_LIVE_PROMPT + liveMemoryContext,
         tools: [
           {
@@ -4533,6 +4602,18 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
           }
           if (message.serverContent?.modelTurn) {
             console.log('[GEMINI_MODEL_TURN_RECEIVED]');
+          }
+
+          // Persist completed transcripts only. PCM and video frames never enter this store.
+          const inputTranscript = message.serverContent?.inputTranscription;
+          if (!isLiveGuestMode && inputTranscript?.finished && inputTranscript.text) {
+            persistOwnerTurn('user', inputTranscript.text, liveModality);
+            clientWs.send(JSON.stringify({ type: 'conversation_transcript', role: 'user', modality: liveModality, text: inputTranscript.text, timestamp: Date.now() }));
+          }
+          const outputTranscript = message.serverContent?.outputTranscription;
+          if (!isLiveGuestMode && outputTranscript?.finished && outputTranscript.text) {
+            persistOwnerTurn('maryam', outputTranscript.text, liveModality);
+            clientWs.send(JSON.stringify({ type: 'conversation_transcript', role: 'maryam', modality: liveModality, text: outputTranscript.text, timestamp: Date.now() }));
           }
 
           // Check for tool calls from Gemini Live
@@ -4682,11 +4763,14 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
           lastVisionError = vErr instanceof Error ? vErr.message : String(vErr);
           console.warn(`[LIVE_VISION_BACKEND_ERROR] rejected=${visionFramesGeminiRejected} error=${lastVisionError}`);
         }
+      } else if (msg.type === 'conversation_modality' && (msg.modality === 'voice' || msg.modality === 'video')) {
+        liveModality = msg.modality;
       } else if (msg.type === 'interrupt') {
         // User interrupted playback / barge-in
         waitingForModelTurn = false;
         console.log('User barge-in interrupted Maryam audio');
       } else if (msg.type === 'text' && msg.text && isSessionActive && session) {
+        if (!isLiveGuestMode) persistOwnerTurn('user', msg.text, liveModality);
         speechTurnStart = Date.now();
         waitingForModelTurn = true;
         session.sendRealtimeInput({

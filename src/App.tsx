@@ -216,6 +216,7 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const videoFrameSamplerRef = useRef<number | null>(null);
   const videoFrameInFlightRef = useRef(false);
+  const isVideoCallActiveRef = useRef(false);
   const liveVisionDiagnosticsRef = useRef({
     cameraFramesCaptured: 0,
     cameraFrameBytesLast: 0,
@@ -257,6 +258,26 @@ export default function App() {
         }
       })
       .catch((err) => console.warn('Memory disk sync notice:', err));
+
+    // Server is authoritative for owner conversational continuity; localStorage is display cache only.
+    fetch('/api/owner/conversation', {
+      headers: (() => {
+        const token = localStorage.getItem('hoorvia_user_token');
+        return token ? { Authorization: `Bearer ${token}` } : undefined;
+      })(),
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (Array.isArray(data?.turns) && data.turns.length) {
+          const hydrated = data.turns.map((turn: any) => ({
+            id: turn.id, sender: turn.role === 'user' ? 'user' : 'maryam', text: turn.content,
+            timestamp: turn.timestamp, emotion: undefined,
+          }));
+          setMessages(hydrated);
+          saveRecentConversation(hydrated);
+        }
+      })
+      .catch((err) => console.warn('Conversation continuity sync notice:', err));
   }, []);
 
   // Save memory whenever updated manually (Authoritative user edit)
@@ -474,7 +495,8 @@ export default function App() {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${settings.voiceName}${isGuestMode ? '&guestMode=true' : ''}`;
+    const ownerToken = localStorage.getItem('hoorvia_user_token') || '';
+    const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${settings.voiceName}&ownerToken=${encodeURIComponent(ownerToken)}${isGuestMode ? '&guestMode=true' : ''}`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -485,13 +507,22 @@ export default function App() {
         setIsConnected(true);
         // Measure initial input latency
         ws.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }));
+        ws.send(JSON.stringify({ type: 'conversation_modality', modality: isVideoCallActiveRef.current ? 'video' : 'voice' }));
       };
 
       ws.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
 
-          if (data.type === 'pong' && typeof data.clientTime === 'number') {
+          if (data.type === 'conversation_transcript' && (data.role === 'user' || data.role === 'maryam') && data.text) {
+            setMessages((previous) => {
+              const exists = previous.some((item) => item.sender === (data.role === 'user' ? 'user' : 'maryam') && item.text === data.text && Math.abs(item.timestamp - (data.timestamp || Date.now())) < 20000);
+              if (exists) return previous;
+              const next = [...previous, { id: `live-${data.timestamp || Date.now()}-${data.role}`, sender: data.role === 'user' ? 'user' : 'maryam', text: data.text, timestamp: data.timestamp || Date.now() } as ChatMessage];
+              saveRecentConversation(next);
+              return next;
+            });
+          } else if (data.type === 'pong' && typeof data.clientTime === 'number') {
             const rtt = performance.now() - data.clientTime;
             const latency = Math.max(1, Math.round(rtt / 2));
             setDiagnostics((prev) => ({
@@ -786,7 +817,10 @@ export default function App() {
 
       const res = await fetch('/api/tts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(localStorage.getItem('hoorvia_user_token') ? { Authorization: `Bearer ${localStorage.getItem('hoorvia_user_token')}` } : {}),
+        },
         body: JSON.stringify({
           text: msg.text,
           voiceName: settings.voiceName,
@@ -864,6 +898,8 @@ export default function App() {
       videoFrameSamplerRef.current = null;
     }
     setIsVideoCallActive(false);
+    isVideoCallActiveRef.current = false;
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'conversation_modality', modality: 'voice' }));
     cameraManager.stopCamera('Video call ended');
     setIsCameraActive(false);
     setCameraStream(null);
@@ -887,6 +923,8 @@ export default function App() {
     }
     setVoiceState('Listening');
     setIsVideoCallActive(true);
+    isVideoCallActiveRef.current = true;
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'conversation_modality', modality: 'video' }));
     liveVisionDiagnosticsRef.current = {
       cameraFramesCaptured: 0,
       cameraFrameBytesLast: 0,

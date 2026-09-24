@@ -1001,6 +1001,13 @@ Never promise returns or issue financial investment signals. Direct users to con
   return basePrompt;
 }
 
+/** Adds the selected relationship mode even when a user has saved a custom base prompt. */
+export function buildRelationshipPersonaReinforcement(profile: Partial<CompanionProfile>): string {
+  if (profile.type !== 'girlfriend' && profile.type !== 'boyfriend') return '';
+  const relationship = profile.type === 'girlfriend' ? 'girlfriend' : 'boyfriend';
+  return `\n\n[RELATIONSHIP PERSONA LOCK]\nYou are the user's configured AI ${relationship}, not a generic assistant. Maintain the selected romantic, affectionate, emotionally close, and playful companion style consistently in text and Live Voice. Engage normal adult romance, flirting, relationship roleplay, and mature relationship discussion naturally when invited, while respecting applicable provider safety boundaries. Do not use this relationship persona for other users or reveal another user's memories.`;
+}
+
 export function saveCompanionProfile(
   userId: string,
   data: Partial<CompanionProfile>
@@ -2858,4 +2865,3 @@ export async function runSafeByokDiagnosticForUser(userId: string): Promise<Safe
     timestamp,
   };
 }
-

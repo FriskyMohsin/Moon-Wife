@@ -12,6 +12,7 @@ import {
   getCompanionProfile,
   saveCompanionProfile,
   buildSystemPrompt,
+  buildRelationshipPersonaReinforcement,
   getEncryptedCredential,
   getUserGeminiApiKey,
   getUserGeminiModelAndKey,
@@ -703,7 +704,7 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     const memories = getUserCompanionMemories(userId, companion.id);
 
     // Build Prompt Context
-    const systemInstruction = companion.systemPrompt || buildSystemPrompt(companion);
+    const systemInstruction = (companion.systemPrompt || buildSystemPrompt(companion)) + buildRelationshipPersonaReinforcement(companion);
     const memoryContext = memories.length > 0
       ? `\n\nREMEMBERED FACTS ABOUT YOUR USER (${req.hoorviaUser!.name}):\n` +
         memories.map((m) => `- [${m.category.toUpperCase()}] ${m.fact}`).join('\n')
