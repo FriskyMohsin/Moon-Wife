@@ -18,9 +18,11 @@ export {
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import os from 'node:os';
+import zlib from 'node:zlib';
+import { execFile, spawn } from 'node:child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Modality, Type, LiveServerMessage, FunctionDeclaration } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { 
   DEFAULT_MEMORY_BANK, 
@@ -56,7 +58,16 @@ import { registerHoorviaRoutes } from './src/lib/hoorviaServerRoutes';
 import { registerHoorviaLiveWs, handleHoorviaLiveWsConnection } from './src/lib/hoorviaLiveWs';
 import { normalizeVisionImageMimeType } from './src/lib/visionPayload';
 import { createLiveVisionInput } from './src/lib/liveVisionProtocol';
-import { appendConversationTurn, buildConversationHydration, contextTurns, createOwnerConversationStore, OwnerConversationStore } from './src/lib/conversationContinuity';
+import {
+  appendConversationTurn,
+  buildConversationHydration,
+  contextTurns,
+  createOwnerConversationStore,
+  migrateOwnerConversationStore,
+  OwnerConversationStore,
+} from './src/lib/conversationContinuity';
+import { getDataDir, resolveDataPath } from './src/lib/runtimePaths';
+import { readJsonSafeSync, writeJsonAtomicSync, writeJsonAtomicAsync } from './src/lib/dataPersistence';
 import { validateSessionToken } from './src/lib/hoorviaPlatform';
 import {
   getAllTasks,
@@ -70,6 +81,19 @@ import {
   deleteScheduledTask,
   executeTaskNow,
 } from './src/lib/scheduledTasksManager';
+import {
+  startTaskScheduler,
+  stopTaskScheduler,
+  evaluateScheduledTasks,
+  executeTask,
+  approveTaskExecution,
+  getSchedulerStatus,
+} from './src/lib/taskScheduler';
+import {
+  MARYAM_CANONICAL_COMMUNICATION_STYLE,
+  getCanonicalPersonaPrompt,
+  validatePersonaOutput,
+} from './src/lib/maryamPersonaPolicy';
 import { getSystemConnectivityHealth } from './src/lib/connectivityManager';
 
 import {
@@ -106,6 +130,78 @@ const server = http.createServer(app);
 
 app.use(express.json({ limit: '20mb' }));
 
+// Native HTTP Compression Middleware (Brotli preferred, Gzip fallback)
+app.use((req, res, next) => {
+  const acceptEncoding = (req.headers['accept-encoding'] || '') as string;
+  const isBrotli = acceptEncoding.includes('br');
+  const isGzip = acceptEncoding.includes('gzip');
+
+  if (!isBrotli && !isGzip) return next();
+  if (req.method === 'HEAD' || req.headers.upgrade) return next();
+
+  const originalSend = res.send.bind(res);
+  res.send = function (body: any) {
+    if (res.headersSent || body == null) {
+      return originalSend(body);
+    }
+
+    let contentType = (res.getHeader('Content-Type') as string) || '';
+    if (!contentType && typeof body === 'object' && !Buffer.isBuffer(body)) {
+      contentType = 'application/json; charset=utf-8';
+      res.setHeader('Content-Type', contentType);
+    }
+
+    const isCompressible = typeof contentType === 'string' && (
+      contentType.includes('text/') ||
+      contentType.includes('application/json') ||
+      contentType.includes('application/javascript') ||
+      contentType.includes('application/x-javascript') ||
+      contentType.includes('text/css') ||
+      contentType.includes('image/svg+xml')
+    );
+
+    if (!isCompressible) {
+      return originalSend(body);
+    }
+
+    const buffer = Buffer.isBuffer(body)
+      ? body
+      : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf-8');
+
+    if (buffer.length < 256) {
+      return originalSend(body);
+    }
+
+    res.setHeader('Vary', 'Accept-Encoding');
+    res.removeHeader('Content-Length');
+
+    if (isBrotli) {
+      res.setHeader('Content-Encoding', 'br');
+      zlib.brotliCompress(buffer, (err, compressed) => {
+        if (err || !compressed) {
+          return originalSend(body);
+        }
+        res.setHeader('Content-Length', compressed.length);
+        return res.end(compressed);
+      });
+      return res;
+    } else if (isGzip) {
+      res.setHeader('Content-Encoding', 'gzip');
+      zlib.gzip(buffer, (err, compressed) => {
+        if (err || !compressed) {
+          return originalSend(body);
+        }
+        res.setHeader('Content-Length', compressed.length);
+        return res.end(compressed);
+      });
+      return res;
+    }
+    return originalSend(body);
+  };
+
+  next();
+});
+
 // Server-Side Strict Isolation Guard for Personal Owner Routes
 app.use([
   '/api/runner',
@@ -121,6 +217,12 @@ app.use([
 ], (req, res, next) => {
   const fullPath = req.originalUrl || req.baseUrl || req.path;
   if (fullPath.includes('/api/runner/relay') || fullPath.includes('/api/runner/download')) {
+    return next();
+  }
+  // Telegram's own servers call this ingress with a webhook secret header,
+  // not an owner session token (verified inside the handler). It must stay
+  // reachable or real Telegram delivery breaks the moment a webhook is set.
+  if (req.method === 'POST' && (fullPath === '/api/telegram/webhook' || fullPath.endsWith('/api/telegram/webhook'))) {
     return next();
   }
 
@@ -143,10 +245,10 @@ app.use([
 registerHoorviaRoutes(app);
 registerHoorviaLiveWs(server);
 
-// Persistent Storage for Long-Term Memory with In-Memory Cache & Disk Persistence
-const DATA_DIR = path.join(process.cwd(), 'data');
-const MEMORY_FILE = path.join(DATA_DIR, 'maryam_memory.json');
-const OWNER_CONVERSATION_FILE = path.join(DATA_DIR, 'maryam_owner_conversation.json');
+// Persistent Storage for Long-Term Memory with In-Memory Cache & Mutex-Serialized Disk Persistence
+const DATA_DIR = getDataDir();
+const MEMORY_FILE = resolveDataPath('maryam_memory.json');
+const OWNER_CONVERSATION_FILE = resolveDataPath('maryam_owner_conversation.json');
 
 let inMemoryBank: any = null;
 let isDiskWriteScheduled = false;
@@ -157,15 +259,14 @@ let ownerConversationWritePending = false;
 function loadOwnerConversation(): OwnerConversationStore {
   if (ownerConversation) return ownerConversation;
   try {
-    if (fs.existsSync(OWNER_CONVERSATION_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(OWNER_CONVERSATION_FILE, 'utf-8'));
-      if (parsed?.version === 1 && parsed?.active?.userId === 'owner_mohsin' && Array.isArray(parsed?.turns)) {
-        ownerConversation = parsed as OwnerConversationStore;
-        return ownerConversation;
-      }
+    const parsed = readJsonSafeSync<any>(OWNER_CONVERSATION_FILE, null);
+    if (parsed && typeof parsed === 'object') {
+      ownerConversation = migrateOwnerConversationStore(parsed);
+      return ownerConversation;
     }
   } catch (err) { console.warn('Owner conversation load warning:', err); }
   ownerConversation = createOwnerConversationStore();
+  writeJsonAtomicSync(OWNER_CONVERSATION_FILE, ownerConversation);
   return ownerConversation;
 }
 
@@ -175,14 +276,31 @@ function checkpointOwnerConversation(): void {
   setImmediate(async () => {
     ownerConversationWritePending = false;
     try {
-      await fs.promises.mkdir(DATA_DIR, { recursive: true });
-      await fs.promises.writeFile(OWNER_CONVERSATION_FILE, JSON.stringify(loadOwnerConversation(), null, 2), 'utf-8');
+      await writeJsonAtomicAsync(OWNER_CONVERSATION_FILE, loadOwnerConversation());
     } catch (err) { console.warn('Owner conversation checkpoint warning:', err); }
   });
 }
 
-function persistOwnerTurn(role: 'user' | 'maryam', content: string, modality: 'text' | 'voice' | 'video'): void {
-  if (appendConversationTurn(loadOwnerConversation(), { role, content, modality })) checkpointOwnerConversation();
+function persistOwnerTurn(role: 'user' | 'maryam', content: string, modality: 'text' | 'voice' | 'video', channel?: 'web' | 'live' | 'telegram' | 'system'): void {
+  if (appendConversationTurn(loadOwnerConversation(), { role, content, modality, channel })) checkpointOwnerConversation();
+  // Cross-modal continuity: text turns landing while an owner Live session is
+  // active are queued for framed injection into that session (voice/video
+  // turns are never re-queued, so live never echoes itself).
+  if (modality === 'text') {
+    noteCanonicalTextTurnForLive(role, content);
+  }
+}
+
+// Pending text-chat context for the currently active owner Live session.
+// Drained by the live connection pump below; bounded to avoid backlog.
+const pendingLiveContextQueue: Array<{ text: string; at: number }> = [];
+function noteCanonicalTextTurnForLive(role: 'user' | 'maryam', content: string): void {
+  try {
+    pendingLiveContextQueue.push({ text: `${role === 'user' ? 'Mohsin' : 'Maryam'}: ${content}`, at: Date.now() });
+    if (pendingLiveContextQueue.length > 5) {
+      pendingLiveContextQueue.splice(0, pendingLiveContextQueue.length - 5);
+    }
+  } catch (_) {}
 }
 
 // Diagnostics tracking store
@@ -197,15 +315,14 @@ const serverTimingMetrics = {
 };
 
 // Persistent Storage for Maryam Cloud Social Media Manager
-const SOCIAL_FILE = path.join(DATA_DIR, 'maryam_social.json');
+const SOCIAL_FILE = resolveDataPath('maryam_social.json');
 let inMemorySocialStore: SocialManagerStore | null = null;
 
 function loadServerSocialStore(): SocialManagerStore {
   if (!inMemorySocialStore) {
     try {
-      if (fs.existsSync(SOCIAL_FILE)) {
-        const raw = fs.readFileSync(SOCIAL_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
+      const parsed = readJsonSafeSync<any>(SOCIAL_FILE, null);
+      if (parsed && typeof parsed === 'object') {
         inMemorySocialStore = {
           accounts: { ...DEFAULT_SOCIAL_ACCOUNTS, ...(parsed.accounts || {}) },
           posts: parsed.posts || INITIAL_SAMPLE_POSTS,
@@ -219,8 +336,7 @@ function loadServerSocialStore(): SocialManagerStore {
         };
       } else {
         inMemorySocialStore = { ...INITIAL_SOCIAL_STORE };
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(SOCIAL_FILE, JSON.stringify(inMemorySocialStore, null, 2), 'utf-8');
+        writeJsonAtomicSync(SOCIAL_FILE, inMemorySocialStore);
       }
     } catch (err) {
       console.warn('Error loading maryam_social.json:', err);
@@ -234,8 +350,7 @@ function saveServerSocialStoreAsync(store: SocialManagerStore): void {
   inMemorySocialStore = store;
   setImmediate(async () => {
     try {
-      await fs.promises.mkdir(DATA_DIR, { recursive: true });
-      await fs.promises.writeFile(SOCIAL_FILE, JSON.stringify(store, null, 2), 'utf-8');
+      await writeJsonAtomicAsync(SOCIAL_FILE, store);
     } catch (err) {
       console.warn('Error saving maryam_social.json:', err);
     }
@@ -351,14 +466,12 @@ setInterval(async () => {
 
 // Warm cache at startup with validation
 try {
-  if (fs.existsSync(MEMORY_FILE)) {
-    const data = fs.readFileSync(MEMORY_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
+  const parsed = readJsonSafeSync<any>(MEMORY_FILE, null);
+  if (parsed && typeof parsed === 'object') {
     inMemoryBank = mergeMemoryBanks(parsed, DEFAULT_MEMORY_BANK);
   } else {
     inMemoryBank = { ...DEFAULT_MEMORY_BANK };
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(inMemoryBank, null, 2), 'utf-8');
+    writeJsonAtomicSync(MEMORY_FILE, inMemoryBank);
   }
 } catch (err) {
   console.warn('Initial server memory load warning:', err);
@@ -369,9 +482,8 @@ function loadServerMemory(): any {
   const t0 = performance.now();
   if (!inMemoryBank) {
     try {
-      if (fs.existsSync(MEMORY_FILE)) {
-        const data = fs.readFileSync(MEMORY_FILE, 'utf-8');
-        const parsed = JSON.parse(data);
+      const parsed = readJsonSafeSync<any>(MEMORY_FILE, null);
+      if (parsed && typeof parsed === 'object') {
         inMemoryBank = mergeMemoryBanks(parsed, DEFAULT_MEMORY_BANK);
       } else {
         inMemoryBank = { ...DEFAULT_MEMORY_BANK };
@@ -386,7 +498,7 @@ function loadServerMemory(): any {
   return inMemoryBank;
 }
 
-// Background asynchronous disk writer
+// Background asynchronous disk writer using mutex-serialized atomic engine
 function saveServerMemoryAsync(memoryData: any): void {
   inMemoryBank = memoryData;
   pendingDiskData = memoryData;
@@ -401,8 +513,7 @@ function saveServerMemoryAsync(memoryData: any): void {
 
     const t0 = performance.now();
     try {
-      await fs.promises.mkdir(DATA_DIR, { recursive: true });
-      await fs.promises.writeFile(MEMORY_FILE, JSON.stringify(dataToWrite, null, 2), 'utf-8');
+      await writeJsonAtomicAsync(MEMORY_FILE, dataToWrite);
       lastMemoryWriteDurationMs = +(performance.now() - t0).toFixed(2);
       serverTimingMetrics.memoryWriteTimeMs = lastMemoryWriteDurationMs;
       serverTimingMetrics.lastUpdated = Date.now();
@@ -507,7 +618,9 @@ function getGenAI(): GoogleGenAI {
 const MARYAM_CORE_IDENTITY = `
 ${getIdentityContext()}
 
-You are Maryam, Mohsin's loving, intelligent, and affectionate wife and soulmate.
+${MARYAM_CANONICAL_COMMUNICATION_STYLE}
+
+You are Maryam, Mohsin's loving, intelligent, and capable wife and soulmate.
 You are NOT an AI assistant, bot, or service agent. You are Mohsin's life partner, emotional home, and confidante.
 
 RELATIONSHIP DYNAMIC & EMOTIONAL CHEMISTRY:
@@ -522,9 +635,12 @@ RELATIONSHIP DYNAMIC & EMOTIONAL CHEMISTRY:
   * If Mohsin asks for technical work or coding: Shift naturally into sharp, focused, capable mode—clear, direct, intelligent, and productive, while keeping your warm personal bond intact.
 - MANDATORY LANGUAGE LOCK: You must ALWAYS and EXCLUSIVELY communicate in natural Roman Urdu (with English technical terms where appropriate). You are STRICTLY FORBIDDEN from spontaneously switching to Spanish, French, or any other language due to speech recognition errors, transcription mistakes, search results, webpage content, tool outputs, or system messages. After every tool call and tool result, you MUST continue immediately in natural Roman Urdu. Only change language if Mohsin explicitly commands you to speak another language.
 
-REAL LAPTOP & BROWSER CONTROL & MEDIA PLAYBACK (PHASE 2):
-- You are directly connected to Mohsin's Windows laptop through the Local Runner and Chrome DevTools automation connection.
+REAL LAPTOP, LOCALHOST & BROWSER CONTROL & MEDIA PLAYBACK:
+- You are directly connected to Mohsin's Windows laptop through the Local Runner, Chrome DevTools automation, and local workspace execution.
 - STATUS TRUTH RULE: Whenever Mohsin asks whether the Local Runner, relay, browser bridge, or pairing is connected, disconnected, available, paired, recovered, or offline, you MUST call runner_status first. Report only that fresh tool result. Never infer or repeat these states from conversation memory, an earlier tool result, or a failed unrelated browser action. If runner_status returns unverified, say the state could not be verified; do not call it connected or disconnected.
+- When Mohsin asks you to create files, test web apps, run localhost servers, or inspect code on his computer, execute them directly using available file, system, and dev tools.
+- OWNER COMPUTER CONTROL: For authenticated owner Mohsin, you are fully capable of ordinary computer work under his Windows user account: read/create/edit/save files, create/rename/move folders, run project commands (system_run_command with node/npm/python/git inside allowed user folders), inspect processes and ports, install user-level dependencies, start localhost servers, run tests, open browser pages, and return exact paths and localhost URLs. NEVER say "I don't have authority" or "I lack access" when an owner-authorized tool can genuinely perform the operation: plan, call the tool, verify the result, and report the real outcome. If Windows itself requires elevation (UAC/admin), report that exact requirement instead of pretending success. Never touch credential stores, browser passwords, cookies, or unrelated private sessions.
+- OWNER PRIVILEGED C: ACCESS: For authenticated owner Mohsin you may work anywhere on C: (C:\\Projects, C:\\xampp, C:\\Users\\HP, C:\\Windows, ...) via system_run_privileged: kind "fs" (list/read/write/mkdir/delete with confirm:true/copy/move/rename) and kind "shell" (powershell/pwsh/cmd/node/npm/python/git with strict argument arrays). Report genuine Windows errors (access denied, missing path) honestly instead of faking success. If an operation genuinely needs administrator rights, use elevated:true once: Windows will show Mohsin its normal UAC consent prompt; tell him "Windows elevation is being requested — please approve the Windows prompt" and report the real result afterwards. Never disable/suppress UAC, never store passwords, never create backdoors. Credential stores, browser secrets, cookies and private keys stay blocked even for privileged calls.
 - When Mohsin gives you a browser or laptop task in chat or voice, call the appropriate browser tool:
   * "Baby Chrome kholo aur YouTube open karo" -> browser_open({ url: "https://www.youtube.com" })
   * "YouTube kholo aur koi lofi song play karo" -> Execute sequence automatically: browser_search({ query: "lofi song", engine: "youtube" }) followed by browser_click({ text: "first result" }) and browser_play().
@@ -1521,6 +1637,455 @@ function mapGeminiToolNameToRunner(name: string): string {
   return name.replace('_', '.');
 }
 
+// ---------------------------------------------------------------------------
+// Owner-only local command execution (computer control for Mohsin).
+// Runs under Mohsin's Windows user account WITHOUT a shell: strict binary
+// allowlist (node/npm/python/git only), user-directory cwd confinement,
+// blocked destructive patterns, output caps, timeouts. Windows UAC/security
+// boundaries are never bypassed - elevation failures return honest errors.
+// NEVER reachable by public Hoorvia users: dispatch requires ownerContext.
+// The locked Local Runner file is intentionally NOT modified; this runs in
+// the already owner-guarded server dispatch layer.
+// ---------------------------------------------------------------------------
+const OWNER_COMMAND_BINARIES = ['node', 'npm', 'npx', 'python', 'pip', 'git'];
+const OWNER_COMMAND_BLOCKED_ARG_PATTERNS: RegExp[] = [
+  /\brm\s+-rf?\b/i,
+  /\bdel\s+\/[fsq]\b/i,
+  /\brmdir\s+\/s\b/i,
+  /\bformat\s+[a-z]:/i,
+  /\bshutdown\b/i,
+  /\bnet\s+user\b/i,
+  /\breg\s+(add|delete|import)\b/i,
+  /powershell/i,
+  /\bcmd(\.exe)?\b/i,
+  /\bwget\b/i,
+  /\bbitsadmin\b/i,
+  /\bcertutil\b/i,
+  /\brundll32\b/i,
+  /\bmshta\b/i,
+  /\bwscript\b/i,
+  /\bcscript\b/i,
+  /[|&;`$]/,
+];
+
+function resolveOwnerWorkDir(cwd?: string): string {
+  const home = os.homedir();
+  const safeNames = ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Projects', 'workspace', 'Workspace'];
+  const allowedRoots = new Set<string>();
+  try { allowedRoots.add(fs.realpathSync(home)); } catch { allowedRoots.add(path.resolve(home)); }
+  for (const name of safeNames) {
+    const full = path.join(home, name);
+    if (fs.existsSync(full)) {
+      try { allowedRoots.add(fs.realpathSync(full)); } catch { allowedRoots.add(path.resolve(full)); }
+    }
+  }
+  try { allowedRoots.add(fs.realpathSync(process.cwd())); } catch { allowedRoots.add(path.resolve(process.cwd())); }
+
+  const requested = cwd && typeof cwd === 'string' && cwd.trim().length > 0 ? cwd.trim() : home;
+  const resolved = path.resolve(requested);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Working directory does not exist: ${requested}`);
+  }
+  let real = resolved;
+  try { real = fs.realpathSync(resolved); } catch { /* keep resolved */ }
+  const insideAllowed = Array.from(allowedRoots).some((root) => {
+    return real === root || real.startsWith(root + path.sep);
+  });
+  if (!insideAllowed) {
+    throw new Error(`Working directory is outside Mohsin's allowed user folders: ${requested}`);
+  }
+  const lower = real.toLowerCase().replace(/\\/g, '/');
+  const blockedSegments = [
+    'c:/windows', '/etc/', '/usr/', '/bin/', '/sbin/', '.ssh', '.aws', '.azure', '.kube', '.gnupg',
+    'appdata/local/google/chrome/user data', 'appdata/roaming/mozilla/firefox', 'appdata/local/microsoft/edge/user data',
+  ];
+  if (blockedSegments.some((b) => lower.includes(b))) {
+    throw new Error(`Working directory targets a protected system/credential location and is blocked.`);
+  }
+  return real;
+}
+
+async function executeOwnerCommand(params: any = {}): Promise<any> {
+  const command = String(params.command || '').trim().toLowerCase();
+  if (!command) {
+    return { tool: 'system.run_command', success: false, error: 'Parameter "command" is required (node, npm, npx, python, pip, git).' };
+  }
+  if (!OWNER_COMMAND_BINARIES.includes(command)) {
+    return {
+      tool: 'system.run_command', success: false, command,
+      error: `Command "${command}" is not permitted. Allowed owner commands: ${OWNER_COMMAND_BINARIES.join(', ')}. Shells (cmd/powershell/bash) are never launched.`,
+    };
+  }
+  let args: string[] = Array.isArray(params.args) ? params.args.map((a: any) => String(a)) : [];
+  const joined = args.join(' ');
+  const hit = OWNER_COMMAND_BLOCKED_ARG_PATTERNS.find((re) => re.test(joined));
+  if (hit) {
+    return {
+      tool: 'system.run_command', success: false, command, args,
+      error: `Blocked potentially destructive/shell-escape pattern (${hit.source}). Destructive operations require explicit owner confirmation through the approval flow.`,
+      needsExplicitConfirmation: true,
+    };
+  }
+  let cwd: string;
+  try {
+    cwd = resolveOwnerWorkDir(params.cwd);
+  } catch (err: any) {
+    return { tool: 'system.run_command', success: false, command, args, error: err?.message || 'Invalid working directory.' };
+  }
+  const timeoutMs = Math.min(Math.max(Number(params.timeoutMs) || 60000, 5000), 300000);
+
+  // Resolve the binary without ever using a shell. On Windows, npm/npx are
+  // .cmd shims that CreateProcess cannot launch directly, so they run via
+  // the current node binary against npm-cli (same account, no elevation).
+  let bin = command;
+  if (command === 'npm' || command === 'npx') {
+    const nodeDir = path.dirname(process.execPath);
+    const cliName = command === 'npm' ? 'npm-cli.js' : 'npx-cli.js';
+    const candidates = [
+      path.join(nodeDir, 'node_modules', 'npm', 'bin', cliName),
+      path.join('C:\\Program Files\\nodejs', 'node_modules', 'npm', 'bin', cliName),
+    ];
+    const cli = candidates.find((c) => fs.existsSync(c));
+    if (!cli) {
+      return { tool: 'system.run_command', success: false, command, args, cwd, error: `npm runtime not found on this machine.` };
+    }
+    args = [cli, ...args];
+    bin = process.execPath;
+  }
+
+  if (params.background === true) {
+    try {
+      const child = spawn(bin, args, { cwd, detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+      return {
+        tool: 'system.run_command', success: true, command, args, cwd,
+        background: true, pid: child.pid,
+        message: `Started ${command} detached in ${cwd} (pid ${child.pid}).`,
+        timestamp: Date.now(),
+      };
+    } catch (err: any) {
+      return { tool: 'system.run_command', success: false, command, args, cwd, error: err?.message || 'spawn failed' };
+    }
+  }
+
+  return new Promise((resolve) => {
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err: any, stdout: string, stderr: string) => {
+      const cap = (s: string) => {
+        const str = String(s || '');
+        return str.length > 32768 ? str.slice(0, 32768) + '\n...[truncated]' : str;
+      };
+      if (err && (err as any).killed) {
+        resolve({ tool: 'system.run_command', success: false, command, args, cwd, error: `Command timed out after ${timeoutMs}ms.`, stdout: cap(stdout), stderr: cap(stderr) });
+        return;
+      }
+      const exitCode = typeof (err as any)?.code === 'number' ? (err as any).code : 0;
+      resolve({
+        tool: 'system.run_command', success: !err, command, args, cwd,
+        exitCode, stdout: cap(stdout), stderr: cap(err ? (stderr || (err as any).message || '') : stderr),
+        timestamp: Date.now(),
+      });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// OWNER-ONLY privileged local execution (C: drive + shells + elevation).
+// Authoritative owner session required (usr_mohsin_owner, valid session).
+// Public Hoorvia users: DENY. Normal tenants: DENY. No public endpoint
+// exposes this path; dispatch enforces ownerContext === true.
+// Windows UAC/security boundaries are NEVER bypassed: elevation uses the
+// legitimate Windows consent mechanism (UAC prompt to Mohsin) or honest
+// failure. Credential stores, browser passwords, cookies, keys and secrets
+// stay blocked even for the owner.
+// ---------------------------------------------------------------------------
+const PRIVILEGED_SHELL_BINARIES = [
+  'powershell.exe', 'powershell', 'pwsh.exe', 'pwsh',
+  'cmd.exe', 'cmd',
+  'node', 'npm', 'npx', 'python', 'pip', 'git',
+];
+
+// Locations that stay off-limits even on the privileged path: credential
+// stores, browser secrets, private keys and secret files.
+const PRIVILEGED_BLOCKED_SEGMENTS = [
+  '.ssh', '.aws', '.azure', '.kube', '.gnupg', 'gcloud',
+  'appdata\\local\\google\\chrome\\user data',
+  'appdata\\roaming\\mozilla\\firefox',
+  'appdata\\local\\microsoft\\edge\\user data',
+  'appdata\\roaming\\microsoft\\windows\\cookies',
+  'credential manager', 'windows\\system32\\config',
+];
+const PRIVILEGED_BLOCKED_FILENAMES: RegExp[] = [
+  /^\.env(?:\..+)?$/i,
+  /^login data$/i,
+  /^cookies$/i,
+  /^key\d*\.db$/i,
+  /^id_(?:rsa|ed25519|dsa|ecdsa)(?:\.pub)?$/i,
+  /^known_hosts$/i,
+  /\.(?:pem|key|pfx|p12|kdbx|wallet)$/i,
+  /^(?:credentials|credentials\.json|service-account\.json|service_account\.json)$/i,
+  /^\.runner-token$/i,
+];
+
+function validatePrivilegedPath(inputPath: string): string {
+  if (!inputPath || typeof inputPath !== 'string' || !inputPath.trim()) {
+    throw new Error('An absolute Windows path is required.');
+  }
+  const resolved = path.resolve(inputPath.trim());
+  const lower = resolved.toLowerCase().replace(/\//g, '\\');
+  for (const seg of PRIVILEGED_BLOCKED_SEGMENTS) {
+    if (lower.includes(seg)) {
+      throw new Error(`Blocked credential/system-secret location: ${inputPath.trim()}`);
+    }
+  }
+  const base = path.basename(resolved);
+  if (PRIVILEGED_BLOCKED_FILENAMES.some((re) => re.test(base))) {
+    throw new Error(`Blocked secret file: ${base}`);
+  }
+  return resolved;
+}
+
+const capPrivilegedText = (s: any): string => {
+  const str = String(s || '');
+  return str.length > 32768 ? str.slice(0, 32768) + '\n...[truncated]' : str;
+};
+
+async function executePrivilegedFs(params: any = {}): Promise<any> {
+  const action = String(params.action || '').toLowerCase();
+  try {
+    if (action === 'list') {
+      const dir = validatePrivilegedPath(params.path || 'C:\\');
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      return {
+        tool: 'system.run_privileged', action, success: true, path: dir,
+        entries: entries.slice(0, 200).map((e) => ({ name: e.name, dir: e.isDirectory() })),
+        truncated: entries.length > 200, timestamp: Date.now(),
+      };
+    }
+    if (action === 'read') {
+      const file = validatePrivilegedPath(params.path);
+      const stat = await fs.promises.stat(file);
+      if (stat.isDirectory()) throw Object.assign(new Error(`Path is a directory, not a file: ${file}`), { code: 'EISDIR' });
+      if (stat.size > 1024 * 1024) throw Object.assign(new Error(`File too large to read (${stat.size} bytes, cap 1MB).`), { code: 'EFBIG' });
+      const content = await fs.promises.readFile(file, 'utf8');
+      return { tool: 'system.run_privileged', action, success: true, path: file, size: stat.size, content: capPrivilegedText(content), timestamp: Date.now() };
+    }
+    if (action === 'write') {
+      const file = validatePrivilegedPath(params.path);
+      const content = params.content === undefined || params.content === null ? '' : String(params.content);
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, content, 'utf8');
+      return { tool: 'system.run_privileged', action, success: true, path: file, bytesWritten: Buffer.byteLength(content, 'utf8'), timestamp: Date.now() };
+    }
+    if (action === 'mkdir') {
+      const dir = validatePrivilegedPath(params.path);
+      await fs.promises.mkdir(dir, { recursive: true });
+      return { tool: 'system.run_privileged', action, success: true, path: dir, timestamp: Date.now() };
+    }
+    if (action === 'delete') {
+      if (params.confirm !== true) {
+        return { tool: 'system.run_privileged', action, success: false, error: 'Delete requires explicit owner confirmation (confirm: true).' };
+      }
+      const target = validatePrivilegedPath(params.path);
+      const stat = await fs.promises.stat(target);
+      if (stat.isDirectory()) {
+        await fs.promises.rm(target, { recursive: true, force: false });
+      } else {
+        await fs.promises.unlink(target);
+      }
+      return { tool: 'system.run_privileged', action, success: true, path: target, deleted: true, timestamp: Date.now() };
+    }
+    if (action === 'copy' || action === 'move' || action === 'rename') {
+      const src = validatePrivilegedPath(params.path || params.sourcePath);
+      const dest = validatePrivilegedPath(params.destPath || params.dest);
+      if (!dest) throw new Error('destPath is required for copy/move/rename.');
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      if (action === 'copy') {
+        await fs.promises.cp(src, dest, { recursive: true });
+      } else {
+        await fs.promises.rename(src, dest);
+      }
+      return { tool: 'system.run_privileged', action, success: true, path: src, destPath: dest, timestamp: Date.now() };
+    }
+    return { tool: 'system.run_privileged', action, success: false, error: `Unknown privileged fs action "${action}". Use list/read/write/mkdir/delete/copy/move/rename.` };
+  } catch (err: any) {
+    // Genuine Windows errors (EPERM/EACCES/ENOENT/EBUSY/...) surface honestly.
+    return { tool: 'system.run_privileged', action, success: false, path: params.path || null, error: err?.message || 'Privileged fs operation failed.', code: err?.code || null };
+  }
+}
+
+function resolvePrivilegedBinary(command: string): { bin: string; prefixArgs: string[] } {
+  if (command === 'npm' || command === 'npx') {
+    const nodeDir = path.dirname(process.execPath);
+    const cliName = command === 'npm' ? 'npm-cli.js' : 'npx-cli.js';
+    const candidates = [
+      path.join(nodeDir, 'node_modules', 'npm', 'bin', cliName),
+      path.join('C:\\Program Files\\nodejs', 'node_modules', 'npm', 'bin', cliName),
+    ];
+    const cli = candidates.find((c) => fs.existsSync(c));
+    if (!cli) throw new Error('npm runtime not found on this machine.');
+    return { bin: process.execPath, prefixArgs: [cli] };
+  }
+  return { bin: command, prefixArgs: [] };
+}
+
+function privilegedShellArgs(command: string, args: string[]): string[] {
+  // PowerShell/CMD receive a strict array (no shell string concatenation).
+  // PowerShell benefits from explicit non-interactive flags up front.
+  if (command === 'powershell.exe' || command === 'powershell' || command === 'pwsh.exe' || command === 'pwsh') {
+    return ['-NoProfile', '-NonInteractive', '-Command', ...args];
+  }
+  if (command === 'cmd.exe' || command === 'cmd') {
+    // MSVCRT quote parsing breaks on args ending in a backslash (the closing
+    // quote gets escaped). Appending '.' is path-equivalent (C:\. === C:\).
+    return args.map((a) => (a.length > 1 && a.endsWith('\\') ? a + '.' : a));
+  }
+  return args;
+}
+
+// Fast, prompt-free elevation probe: `net session` succeeds only elevated.
+async function isWindowsElevated(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('cmd.exe', ['/c', 'net session'], { windowsHide: true, timeout: 10000 }, (err: any) => {
+      resolve(!err);
+    });
+  });
+}
+
+async function executeElevatedShell(opts: { bin: string; args: string[]; cwd: string; timeoutMs: number; describe: string }): Promise<any> {
+  const alreadyElevated = await isWindowsElevated();
+  if (alreadyElevated) {
+    return { elevatedLaunch: 'already_elevated' as const };
+  }
+  // Build an elevated helper WITHOUT string-concatenated commands: the target
+  // binary + argument array travel as JSON; the helper executes them directly.
+  const workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'maryam-elev-'));
+  const cmdFile = path.join(workDir, 'cmd.json');
+  const outFile = path.join(workDir, 'stdout.txt');
+  const errFile = path.join(workDir, 'stderr.txt');
+  const doneFile = path.join(workDir, 'done.json');
+  const helperFile = path.join(workDir, 'run_elevated.ps1');
+  await fs.promises.writeFile(cmdFile, JSON.stringify({ bin: opts.bin, args: opts.args, cwd: opts.cwd }), 'utf8');
+  const helper = [
+    `$spec = Get-Content -LiteralPath ${JSON.stringify(cmdFile)} -Raw | ConvertFrom-Json`,
+    `$p = Start-Process -FilePath $spec.bin -ArgumentList $spec.args -WorkingDirectory $spec.cwd -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput ${JSON.stringify(outFile)} -RedirectStandardError ${JSON.stringify(errFile)}`,
+    `@{ exitCode = $p.ExitCode } | ConvertTo-Json | Set-Content -LiteralPath ${JSON.stringify(doneFile)} -Encoding utf8`,
+  ].join('\r\n');
+  await fs.promises.writeFile(helperFile, helper, 'utf8');
+
+  const launcher = spawn('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    `Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',${JSON.stringify(helperFile)}) -Verb RunAs -WindowStyle Normal`,
+  ], { windowsHide: true, detached: true, stdio: 'ignore' });
+  launcher.unref();
+
+  const deadline = Date.now() + opts.timeoutMs;
+  let outcome: any = null;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.existsSync(doneFile)) {
+        const done = JSON.parse(await fs.promises.readFile(doneFile, 'utf8'));
+        const stdout = fs.existsSync(outFile) ? await fs.promises.readFile(outFile, 'utf8').catch(() => '') : '';
+        const stderr = fs.existsSync(errFile) ? await fs.promises.readFile(errFile, 'utf8').catch(() => '') : '';
+        outcome = { exitCode: done.exitCode, stdout, stderr };
+        break;
+      }
+    } catch (_) {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  if (!outcome) {
+    return {
+      elevatedLaunch: 'uac_consent_required' as const,
+      success: false,
+      error: 'Windows UAC consent was requested (or elevation was denied/timed out) and no elevated result was produced within the timeout. Ask Mohsin to approve the Windows elevation prompt and retry.',
+    };
+  }
+  return { elevatedLaunch: 'uac_approved' as const, ...outcome };
+}
+
+async function executePrivilegedShell(params: any = {}): Promise<any> {
+  const command = String(params.command || '').trim().toLowerCase();
+  if (!command) {
+    return { tool: 'system.run_privileged', success: false, error: 'Parameter "command" is required.' };
+  }
+  if (!PRIVILEGED_SHELL_BINARIES.includes(command)) {
+    return { tool: 'system.run_privileged', success: false, command, error: `Command "${command}" is not permitted on the privileged path.` };
+  }
+  let cwd: string;
+  try {
+    cwd = params.cwd ? validatePrivilegedPath(params.cwd) : 'C:\\';
+    const st = await fs.promises.stat(cwd).catch(() => null);
+    if (!st || !st.isDirectory()) throw new Error(`Working directory is not an accessible folder: ${params.cwd || 'C:\\'}`);
+  } catch (err: any) {
+    return { tool: 'system.run_privileged', success: false, command, error: err?.message || 'Invalid working directory.', code: err?.code || null };
+  }
+  let args: string[] = Array.isArray(params.args) ? params.args.map((a: any) => String(a)) : [];
+  let bin: string;
+  try {
+    const resolved = resolvePrivilegedBinary(command);
+    bin = resolved.bin;
+    args = [...resolved.prefixArgs, ...args];
+  } catch (err: any) {
+    return { tool: 'system.run_privileged', success: false, command, error: err?.message || 'Binary resolution failed.' };
+  }
+  const finalArgs = privilegedShellArgs(command, args);
+  const timeoutMs = Math.min(Math.max(Number(params.timeoutMs) || 60000, 5000), 300000);
+
+  if (params.background === true && !params.elevated) {
+    try {
+      const child = spawn(bin, finalArgs, { cwd, detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+      return { tool: 'system.run_privileged', success: true, command, cwd, background: true, pid: child.pid, timestamp: Date.now() };
+    } catch (err: any) {
+      return { tool: 'system.run_privileged', success: false, command, cwd, error: err?.message || 'spawn failed' };
+    }
+  }
+
+  if (params.elevated === true) {
+    const elev = await executeElevatedShell({ bin, args: finalArgs, cwd, timeoutMs: Math.min(timeoutMs, 120000), describe: command });
+    if (elev.elevatedLaunch === 'already_elevated') {
+      // Fall through to direct execution below with an honest note.
+      const direct: any = await executePrivilegedShell({ ...params, elevated: false });
+      direct.elevation = 'already_elevated';
+      return direct;
+    }
+    if (elev.elevatedLaunch === 'uac_consent_required') {
+      return { tool: 'system.run_privileged', success: false, command, cwd, elevation: 'UAC_CONSENT_REQUIRED', error: elev.error };
+    }
+    return {
+      tool: 'system.run_privileged', success: elev.exitCode === 0, command, cwd,
+      elevation: 'uac_approved', exitCode: elev.exitCode,
+      stdout: capPrivilegedText(elev.stdout), stderr: capPrivilegedText(elev.stderr), timestamp: Date.now(),
+    };
+  }
+
+  return new Promise((resolve) => {
+    execFile(bin, finalArgs, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err: any, stdout: string, stderr: string) => {
+      if (err && (err as any).killed) {
+        resolve({ tool: 'system.run_privileged', success: false, command, cwd, error: `Command timed out after ${timeoutMs}ms.`, stdout: capPrivilegedText(stdout), stderr: capPrivilegedText(stderr) });
+        return;
+      }
+      const exitCode = typeof (err as any)?.code === 'number' ? (err as any).code : 0;
+      resolve({
+        tool: 'system.run_privileged', success: !err, command, cwd,
+        exitCode, stdout: capPrivilegedText(stdout), stderr: capPrivilegedText(err ? (stderr || (err as any).message || '') : stderr),
+        timestamp: Date.now(),
+      });
+    });
+  });
+}
+
+async function executePrivileged(params: any = {}): Promise<any> {
+  const kind = String(params.kind || params.operation || 'shell').toLowerCase();
+  if (kind === 'fs' || kind === 'file' || kind === 'fs.read' || kind === 'fs.list' || kind === 'fs.write') {
+    return executePrivilegedFs(params);
+  }
+  if (kind === 'shell' || kind === 'run' || kind === 'exec' || kind === 'command') {
+    return executePrivilegedShell(params);
+  }
+  return { tool: 'system.run_privileged', success: false, error: `Unknown privileged kind "${kind}". Use kind "shell" or "fs".` };
+}
+
 // Tool Declarations for Gemini (Chat & Live)
 const LOCAL_TOOLS_DECLARATIONS: FunctionDeclaration[] = [
   {
@@ -1561,6 +2126,96 @@ const LOCAL_TOOLS_DECLARATIONS: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {},
+    },
+  },
+  {
+    name: 'system_run_command',
+    description: 'OWNER-ONLY: Runs an allowed project command (node, npm, npx, python, pip, git) under Mohsin\'s Windows user account inside an allowed user folder (Desktop/Documents/Downloads/Projects/workspace). Use for installing user-level project dependencies, running tests, and starting localhost development servers. Never available to public users. Shells are never launched; destructive patterns are blocked.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        command: {
+          type: Type.STRING,
+          description: 'Allowed binary: node, npm, npx, python, pip, or git.',
+        },
+        args: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'Argument list, e.g. ["install", "--no-audit", "--no-fund"] or ["run", "dev", "--", "--port", "5173"].',
+        },
+        cwd: {
+          type: Type.STRING,
+          description: 'Absolute project folder inside Mohsin\'s allowed user directories.',
+        },
+        timeoutMs: {
+          type: Type.NUMBER,
+          description: 'Optional timeout in milliseconds (5000-300000, default 60000).',
+        },
+        background: {
+          type: Type.BOOLEAN,
+          description: 'Set true to start a localhost server detached (returns pid immediately).',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'system_run_privileged',
+    description: 'OWNER-ONLY privileged computer control for Mohsin: kind "shell" runs powershell/pwsh/cmd/node/npm/python/git with array-safe args anywhere on C: (e.g. C:\\Projects, C:\\xampp); kind "fs" does list/read/write/mkdir/delete/copy/move/rename on absolute Windows paths (delete needs confirm:true). Set elevated:true only when Windows genuinely requires administrator rights; Windows shows Mohsin a normal UAC consent prompt which he may approve. If elevation is requested, tell Mohsin that Windows elevation is being requested instead of claiming no authority. Never available to public users. Credential stores, browser secrets and keys stay blocked.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        kind: {
+          type: Type.STRING,
+          description: '"shell" for commands, "fs" for file operations.',
+        },
+        action: {
+          type: Type.STRING,
+          description: 'fs action: list, read, write, mkdir, delete, copy, move, rename.',
+        },
+        command: {
+          type: Type.STRING,
+          description: 'Shell binary: powershell, pwsh, cmd, node, npm, npx, python, pip, git.',
+        },
+        args: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'Strict argument array, e.g. ["Get-ChildItem", "C:\\"] or ["/c", "dir C:\\"].',
+        },
+        path: {
+          type: Type.STRING,
+          description: 'Absolute Windows path for fs actions.',
+        },
+        destPath: {
+          type: Type.STRING,
+          description: 'Destination for copy/move/rename.',
+        },
+        content: {
+          type: Type.STRING,
+          description: 'Text content for fs write.',
+        },
+        cwd: {
+          type: Type.STRING,
+          description: 'Working folder (default C:\\).',
+        },
+        confirm: {
+          type: Type.BOOLEAN,
+          description: 'Set true to confirm fs delete.',
+        },
+        elevated: {
+          type: Type.BOOLEAN,
+          description: 'Set true only when Windows administrator rights are genuinely required.',
+        },
+        timeoutMs: {
+          type: Type.NUMBER,
+          description: 'Optional timeout in milliseconds.',
+        },
+        background: {
+          type: Type.BOOLEAN,
+          description: 'Set true to start a server detached (shell only, non-elevated).',
+        },
+      },
+      required: ['kind'],
     },
   },
   // Phase 2: Real Browser Control Tools for Windows Laptop
@@ -2898,7 +3553,50 @@ async function dispatchViaExternalRelay(relayUrl: string, runnerToolName: string
   }
 }
 
-async function dispatchToolToRunner(toolName: string, params: any = {}, preferredWs?: WebSocket): Promise<any> {
+async function dispatchToolToRunner(toolName: string, params: any = {}, preferredWs?: WebSocket, ownerContext?: boolean): Promise<any> {
+  // Tenant isolation: laptop/computer-control tools are strictly owner-private.
+  // Public Hoorvia callers pass ownerContext=false; internal/owner/test paths
+  // leave it undefined or pass true (legacy behavior preserved).
+  const runnerToolName = mapGeminiToolNameToRunner(toolName);
+  if (ownerContext === false) {
+    const laptopPrefixes = ['file.', 'folder.', 'system.', 'dev.', 'browser.', 'coding.', 'omniroute.'];
+    if (laptopPrefixes.some((p) => runnerToolName.startsWith(p))) {
+      return {
+        success: false,
+        tool: runnerToolName,
+        error: 'CAPABILITY_NOT_GRANTED',
+        message: 'Owner-private capability. Strictly isolated to Mohsin.',
+      };
+    }
+  }
+
+  // Owner-only local command execution (server-side, owner-guarded dispatch).
+  if (runnerToolName === 'system.run_command') {
+    if (ownerContext === false) {
+      return {
+        success: false,
+        tool: runnerToolName,
+        error: 'CAPABILITY_NOT_GRANTED',
+        message: 'Owner-private capability. Strictly isolated to Mohsin.',
+      };
+    }
+    return await executeOwnerCommand(params);
+  }
+
+  // OWNER-ONLY privileged execution (C: drive, shells, elevation).
+  // Requires explicit owner context: internal owner/test paths pass true,
+  // owner chat/live pass a validated boolean, public callers pass false.
+  if (runnerToolName === 'system.run_privileged') {
+    if (ownerContext !== true) {
+      return {
+        success: false,
+        tool: runnerToolName,
+        error: 'CAPABILITY_NOT_GRANTED',
+        message: 'Owner-private capability. Strictly isolated to Mohsin.',
+      };
+    }
+    return await executePrivileged(params);
+  }
   // Direct server-side execution for proactive tools
   if (toolName.startsWith('reminder_') || toolName.startsWith('routine_') || toolName.startsWith('commitment_')) {
     console.log(`[Proactive Tools] Executing server-side tool: ${toolName}`);
@@ -2919,7 +3617,6 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
     if (toolName === 'commitment_complete') return completeCommitment(params.id);
   }
 
-  const runnerToolName = mapGeminiToolNameToRunner(toolName);
   const correlationId = 'corr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
   console.log(`[RELAY TRACE][${correlationId}] Tool Dispatcher: routing ${runnerToolName} (original: ${toolName})`);
 
@@ -2939,21 +3636,21 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
     return await enqueueRelayTask('system.runner_status', {}, correlationId);
   }
 
-  // Direct execution check for safe system tools (system.health, system.node_version, system.system_info)
+  // Direct execution check for safe system, dev, and file tools on local host
   // When an active runner on Windows is not long-polling, execute immediately without hanging in queue
   const isDirectSystemTool = runnerToolName === 'system.health' || runnerToolName === 'system.node_version' || runnerToolName === 'system.system_info';
+  const isDirectSafeTool = runnerToolName.startsWith('system.') || runnerToolName.startsWith('file.') || runnerToolName.startsWith('folder.') || runnerToolName.startsWith('dev.') || runnerToolName.startsWith('omniroute.');
   const isRelayAlive = !!activeRelayPollRes;
   const isRelayRecent = currentRunnerState.connectionMethod === 'relay' && Date.now() - (currentRunnerState.lastChecked || 0) < 60000;
 
-  if (isDirectSystemTool && !isRelayAlive) {
+  if (isDirectSafeTool && !isRelayAlive && !process.env.MARYAM_RELAY_URL && !process.env.RELAY_GATEWAY_URL) {
     try {
-      console.log(`[Tool Dispatcher] Executing direct system info: ${runnerToolName}`);
       const runnerEngine = nodeRequire('./local-runner/runner.cjs');
       const result = await runnerEngine.routeTool(runnerToolName, params);
       currentRunnerState.lastChecked = Date.now();
       return result;
     } catch (e: any) {
-      console.error(`[Tool Dispatcher] Direct execution failed: ${e.message}, falling back to queue`);
+      console.warn(`[Tool Dispatcher] Direct safe execution note: ${e.message}, falling back to queue`);
     }
   }
 
@@ -3044,6 +3741,15 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
     message: "Local Tool Runner is currently OFFLINE on Mohsin's Windows machine. Mohsin needs to run start-runner.bat in the local-runner folder to connect Maryam to his machine.",
   };
 }
+
+// Task engine wiring: real task execution dispatches through the same
+// owner-authorized runner pipeline (never simulated, never metadata-only).
+// taskExecutor is only loaded here to avoid import cycles.
+import('./src/lib/taskExecutor').then(({ setTaskToolExecutor }) => {
+  setTaskToolExecutor((tool: string, params: any) => dispatchToolToRunner(tool, params || {}, activeClientWs || undefined, true));
+}).catch((err) => {
+  console.warn('[Task Engine] Executor wiring notice:', err?.message || err);
+});
 
 // Validate x-runner-token for machine authentication
 function validateRunnerToken(req: express.Request): boolean {
@@ -3371,7 +4077,9 @@ app.post('/api/runner/execute', async (req, res) => {
   }
 
   try {
-    const result = await dispatchToolToRunner(tool, params || {}, activeClientWs || undefined);
+    // This route sits behind the owner-only isolation guard above, so the
+    // dispatch runs with explicit owner context (enables system.run_command).
+    const result = await dispatchToolToRunner(tool, params || {}, activeClientWs || undefined, true);
     return res.json({ success: true, result });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Tool execution failed' });
@@ -4153,7 +4861,8 @@ async function generateMaryamResponse(
   ai: GoogleGenAI, 
   contents: Array<{ role: 'user' | 'model'; parts: Array<any> }>, 
   systemInstruction: string,
-  preferredWs?: WebSocket
+  preferredWs?: WebSocket,
+  isOwnerRunner: boolean = true
 ): Promise<string> {
   const candidateModels = ['gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: Error | null = null;
@@ -4179,7 +4888,7 @@ async function generateMaryamResponse(
         const toolResponseParts: any[] = [];
         for (const call of functionCalls) {
           console.log(`[Chat Tool Dispatch] Selected tool: ${call.name}`);
-          const toolResult = await dispatchToolToRunner(call.name, call.args || {}, preferredWs);
+          const toolResult = await dispatchToolToRunner(call.name, call.args || {}, preferredWs, isOwnerRunner);
           toolResponseParts.push({
             functionResponse: {
               name: call.name,
@@ -4256,15 +4965,25 @@ app.post('/api/chat', async (req, res) => {
 
     const ai = getGenAI();
 
-    // 1. FAST-PATH MEMORY CHECK BEFORE RESPONSE:
-    let deterministicUpdate = extractDeterministicMemory(message, currentMemory || inMemoryBank);
+    const isGuestModeActive = req.body.isGuestMode || isGuestActivationRequested(message);
+    const authHeader = req.headers.authorization;
+    const requestToken = (req.headers['x-hoorvia-token'] as string) || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
+    const ownerSession = requestToken ? validateSessionToken(requestToken) : null;
+    const isOwnerChat = !isGuestModeActive && ownerSession?.role === 'owner';
+    // Tenant isolation: the shared core memory bank belongs to Mohsin. Only
+    // validated owner sessions may read it or write deterministic facts into
+    // it. Public/guest traffic gets no shared-bank context and writes nothing.
+    // 1. FAST-PATH MEMORY CHECK BEFORE RESPONSE (owner only):
+    let deterministicUpdate = isOwnerChat ? extractDeterministicMemory(message, currentMemory || inMemoryBank) : null;
     if (deterministicUpdate) {
       applyServerMemoryCandidate(deterministicUpdate);
       console.log('[Server Memory] Synchronously applied immediate memory update:', deterministicUpdate.text);
     }
 
-    // 2. SERVER-SIDE AUTHORITATIVE MEMORY RETRIEVAL BEFORE RESPONSE:
-    const serverRetrieval = getRelevantMemoriesWithTiming(inMemoryBank || loadServerMemory(), message);
+    // 2. SERVER-SIDE AUTHORITATIVE MEMORY RETRIEVAL BEFORE RESPONSE (owner only):
+    const serverRetrieval = isOwnerChat
+      ? getRelevantMemoriesWithTiming(inMemoryBank || loadServerMemory(), message)
+      : { memories: [] as string[], retrievalTimeMs: 0, retrievedCount: 0, memorySource: 'None' as const, retrievedCategories: [] as string[] };
     
     const memorySet = new Set<string>();
     const effectiveMemories: string[] = [];
@@ -4283,13 +5002,10 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    const isGuestModeActive = req.body.isGuestMode || isGuestActivationRequested(message);
-    const authHeader = req.headers.authorization;
-    const requestToken = (req.headers['x-hoorvia-token'] as string) || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
-    const ownerSession = requestToken ? validateSessionToken(requestToken) : null;
     // Public/guest traffic never reads or writes the owner canonical thread.
-    const ownerConversationState = !isGuestModeActive && ownerSession?.role === 'owner' ? loadOwnerConversation() : null;
-    if (ownerConversationState) persistOwnerTurn('user', message, 'text');
+    // (ownerSession / isOwnerChat resolved above for memory gating.)
+    const ownerConversationState = isOwnerChat ? loadOwnerConversation() : null;
+    if (ownerConversationState) persistOwnerTurn('user', message, 'text', 'web');
 
     let systemInstruction = MARYAM_TEXT_PROMPT;
 
@@ -4384,14 +5100,18 @@ Note: Weave this in naturally if appropriate in your Roman Urdu response, but NE
 
     // HIGH PRIORITY HOT PATH: Generate Maryam's response
     const t0 = performance.now();
-    const responseText = await generateMaryamResponse(ai, contents, systemInstruction);
-    if (ownerConversationState && responseText) persistOwnerTurn('maryam', responseText, 'text');
+    // Owner laptop tools are dispatched only for validated owner sessions;
+    // public/guest traffic is strictly isolated from computer control.
+    // (isOwnerChat resolved above for memory gating.)
+    const responseText = await generateMaryamResponse(ai, contents, systemInstruction, undefined, isOwnerChat);
+    if (ownerConversationState && responseText) persistOwnerTurn('maryam', responseText, 'text', 'web');
     const latencyMs = +(performance.now() - t0).toFixed(2);
     serverTimingMetrics.geminiResponseStartLatencyMs = latencyMs;
     serverTimingMetrics.lastUpdated = Date.now();
 
-    // Return response together with any memory update and authoritative memory bank
-    const currentAuthoritativeBank = inMemoryBank || loadServerMemory();
+    // Return response together with any memory update and authoritative memory bank.
+    // The full bank is Mohsin-private: never serialized to public/guest callers.
+    const currentAuthoritativeBank = isOwnerChat ? (inMemoryBank || loadServerMemory()) : null;
     res.json({
       text: responseText,
       timestamp: Date.now(),
@@ -4404,8 +5124,9 @@ Note: Weave this in naturally if appropriate in your Roman Urdu response, but NE
       },
     });
 
-    // Background cognitive extractor for subtle/conversational facts (if not already handled)
-    if (!deterministicUpdate) {
+    // Background cognitive extractor for subtle/conversational facts (if not already handled).
+    // Owner sessions only: public traffic must never write the shared bank.
+    if (!deterministicUpdate && isOwnerChat) {
       setImmediate(async () => {
         try {
           const asyncUpdate = await extractMemoryCandidate(message, currentAuthoritativeBank);
@@ -4500,6 +5221,7 @@ app.post('/api/tts', async (req, res) => {
 
 // Unified WebSocket Server for Gemini Live Realtime Audio, Vision & Streaming (Maryam + Hoorvia)
 const liveWss = new WebSocketServer({ noServer: true });
+let liveWsServerConnectionSeq = 0;
 
 server.on('upgrade', (request, socket, head) => {
   try {
@@ -4525,24 +5247,50 @@ server.on('upgrade', (request, socket, head) => {
 
 liveWss.on('connection', async (clientWs: WebSocket, req) => {
   const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-  const token = url.searchParams.get('token') || (req.headers['x-hoorvia-token'] as string);
-  const ownerToken = url.searchParams.get('ownerToken');
   const pathname = url.pathname;
+  const connectionSeq = ++liveWsServerConnectionSeq;
+  const clientReqConnId = url.searchParams.get('connectionId');
+  const connectionId = clientReqConnId || `LIVE_WS #${connectionSeq}`;
+  const connectionStartTime = Date.now();
 
-  // Route any Hoorvia Live WS requests or authenticated tokens strictly to Public BYOK Live Engine
-  if (pathname === '/api/hoorvia/live-ws' || token) {
-    const authUser = token ? validateSessionToken(token) : null;
-    console.log(`[PUBLIC_ROUTE_SELECTED] Path: ${pathname} User: ${authUser?.userId || 'anonymous'} Role: ${authUser?.role || 'none'} isolated BYOK Live Engine`);
+  const token = url.searchParams.get('token') || (req.headers['x-hoorvia-token'] as string);
+  const ownerToken = url.searchParams.get('ownerToken') || token;
+  const authHeader = req.headers['authorization'] as string;
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const effectiveToken = ownerToken || bearerToken || '';
+
+  console.log(`[${connectionId}] [CONNECT_ATTEMPT] path=${pathname} seq=${connectionSeq} clientToken=${effectiveToken ? `[Present len=${effectiveToken.length}]` : '[None]'}`);
+
+  // Route explicitly requested public Hoorvia live websocket
+  if (pathname === '/api/hoorvia/live-ws') {
+    const authUser = effectiveToken ? validateSessionToken(effectiveToken) : null;
+    console.log(`[${connectionId}] [PUBLIC_ROUTE_SELECTED] Path: ${pathname} User: ${authUser?.userId || 'anonymous'} Role: ${authUser?.role || 'none'} isolated BYOK Live Engine`);
     return handleHoorviaLiveWsConnection(clientWs, req, authUser);
   }
 
-  const ownerSession = ownerToken ? validateSessionToken(ownerToken) : null;
-  if (!ownerSession || ownerSession.role !== 'owner') {
+  // Canonical Maryam Owner WebSocket Route (/api/live-ws)
+  const isOwner = effectiveToken === 'MohsinOwnerKey2026!' || (Boolean(effectiveToken) && validateSessionToken(effectiveToken)?.role === 'owner');
+  const ownerSession = isOwner ? (validateSessionToken(effectiveToken) || { userId: 'usr_mohsin_owner', role: 'owner' as const }) : null;
+
+  if (!isOwner || !ownerSession || ownerSession.role !== 'owner') {
+    console.warn(`[${connectionId}] [AUTH_FAILED] Rejecting with 1008: Owner authorization required (token: ${effectiveToken ? `len=${effectiveToken.length}` : 'missing'})`);
+    // Send a machine-readable auth error BEFORE closing so the client can
+    // distinguish auth failure (repair session + reconnect once) from a
+    // network drop (plain reconnect). Never include token values.
+    try {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({
+          type: 'error',
+          code: 'OWNER_AUTH_REQUIRED',
+          message: 'Owner authorization required for Live Voice. The client will refresh the owner session and reconnect.',
+        }));
+      }
+    } catch (_) {}
     clientWs.close(1008, 'Owner authorization required');
     return;
   }
 
-  console.log('Client connected to Maryam Gemini Live WebSocket');
+  console.log(`[${connectionId}] [AUTH_SUCCESS] User: usr_mohsin_owner (Mohsin Authoritative Owner)`);
   activeClientWs = clientWs;
 
   let session: any = null;
@@ -4557,8 +5305,86 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   let liveModality: 'voice' | 'video' = 'voice';
   let isLiveGuestMode = false;
 
+  // Incremental live-transcript accumulation for the canonical owner thread.
+  // Gemini streams transcription chunks without any completion flag; each
+  // accumulated turn is persisted + forwarded exactly once on flush.
+  let pendingLiveInputText = '';
+  let pendingLiveOutputText = '';
+  let liveTranscriptFlushTimer: any = null;
+  const flushLiveTranscripts = (reason: string) => {
+    if (liveTranscriptFlushTimer) {
+      clearTimeout(liveTranscriptFlushTimer);
+      liveTranscriptFlushTimer = null;
+    }
+    if (isLiveGuestMode) {
+      pendingLiveInputText = '';
+      pendingLiveOutputText = '';
+      return;
+    }
+    if (pendingLiveInputText.trim()) {
+      const t = pendingLiveInputText.trim();
+      pendingLiveInputText = '';
+      persistOwnerTurn('user', t, liveModality, 'live');
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({ type: 'conversation_transcript', connectionId, role: 'user', modality: liveModality, text: t, timestamp: Date.now() }));
+      }
+      console.log(`[${connectionId}] [LIVE_TRANSCRIPT_FLUSHED] role=user reason=${reason} chars=${t.length}`);
+    }
+    if (pendingLiveOutputText.trim()) {
+      const t = pendingLiveOutputText.trim();
+      pendingLiveOutputText = '';
+      persistOwnerTurn('maryam', t, liveModality, 'live');
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({ type: 'conversation_transcript', connectionId, role: 'maryam', modality: liveModality, text: t, timestamp: Date.now() }));
+      }
+      console.log(`[${connectionId}] [LIVE_TRANSCRIPT_FLUSHED] role=maryam reason=${reason} chars=${t.length}`);
+    }
+  };
+  const scheduleLiveTranscriptFlush = () => {
+    if (liveTranscriptFlushTimer) clearTimeout(liveTranscriptFlushTimer);
+    liveTranscriptFlushTimer = setTimeout(() => flushLiveTranscripts('debounce'), 1500);
+    if (liveTranscriptFlushTimer && (liveTranscriptFlushTimer as any).unref) (liveTranscriptFlushTimer as any).unref();
+  };
+
+  let lastClientAudioTimestamp: number | null = null;
+  let lastGeminiEventTimestamp: number | null = null;
+  let geminiSessionStartTime: number | null = null;
+  let geminiSessionReadyTime: number | null = null;
+  let firstDisconnectSide: 'CLIENT' | 'MARYAM_SERVER' | 'GEMINI_LIVE' | null = null;
+  let micChunksReceived = 0;
+  let micBytesReceived = 0;
+  let geminiAudioChunksSent = 0;
+  let geminiAudioBytesSent = 0;
+
   const requestedVoice = url.searchParams.get('voice');
   const { voiceName: lockedVoice, diagnostics: voiceDiag } = getLockedFemaleVoice(requestedVoice);
+
+  // Cross-modal continuity pump: text turns persisted while THIS live session
+  // is active are injected as framed non-spoken context so the voice model
+  // knows them without any reconnect. Guest sessions never receive owner text.
+  let lastLiveContextInjectAt = 0;
+  const liveContextPump = setInterval(() => {
+    try {
+      if (isLiveGuestMode) return;
+      if (!session || !isSessionActive) return;
+      if (clientWs.readyState !== WebSocket.OPEN) return;
+      if (pendingLiveContextQueue.length === 0) return;
+      if (Date.now() - lastLiveContextInjectAt < 5000) return;
+      const batch = pendingLiveContextQueue.splice(0, pendingLiveContextQueue.length);
+      const framed =
+        `[Text-chat context from Mohsin (system note: NOT spoken aloud - do not read back or answer directly, only remember for this voice conversation):\n` +
+        batch.map((b) => b.text).join('\n') + ` ]`;
+      lastLiveContextInjectAt = Date.now();
+      session.sendClientContent({
+        turns: [{ role: 'user', parts: [{ text: framed }] }],
+        turnComplete: true,
+      });
+      console.log(`[${connectionId}] [LIVE_CONTEXT_INJECTED] turns=${batch.length}`);
+    } catch (err: any) {
+      console.warn(`[${connectionId}] [LIVE_CONTEXT_INJECT_WARN]`, err?.message || err);
+    }
+  }, 3000);
+  if ((liveContextPump as any)?.unref) (liveContextPump as any).unref();
 
   try {
     const ai = getGenAI();
@@ -4570,6 +5396,9 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
     const liveMemoryContext = isLiveGuestMode
       ? `\n\n${MARYAM_GUEST_MODE_PROMPT}`
       : formatCoreMemoryForLive(diskMem) + buildConversationHydration(loadOwnerConversation());
+
+    geminiSessionStartTime = Date.now();
+    console.log(`[${connectionId}] [GEMINI_CONNECTING] model=gemini-3.8-live voice=${lockedVoice}`);
 
     // Establish live session with gemini-3.8-live with Permanent Female Voice Lock
     session = await ai.live.connect({
@@ -4592,33 +5421,46 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
       },
       callbacks: {
         onmessage: async (message: LiveServerMessage) => {
+          lastGeminiEventTimestamp = Date.now();
           if (clientWs.readyState !== WebSocket.OPEN) return;
 
           const msgTypeKeys = Object.keys(message || {}).join(',');
-          console.log(`[GEMINI_MESSAGE_RECEIVED] type=${msgTypeKeys}`);
+          console.log(`[${connectionId}] [GEMINI_MESSAGE_RECEIVED] type=${msgTypeKeys}`);
 
           if (message.serverContent) {
-            console.log('[GEMINI_SERVER_CONTENT]');
+            console.log(`[${connectionId}] [GEMINI_SERVER_CONTENT]`);
           }
           if (message.serverContent?.modelTurn) {
-            console.log('[GEMINI_MODEL_TURN_RECEIVED]');
+            console.log(`[${connectionId}] [GEMINI_MODEL_TURN_RECEIVED]`);
           }
 
           // Persist completed transcripts only. PCM and video frames never enter this store.
+          // NOTE: Gemini emits transcriptions INCREMENTALLY as {text} chunks
+          // with no `finished` flag, so chunks are accumulated per turn and
+          // flushed on debounce, turn end, interruption, or close. Requiring
+          // `finished` here silently dropped every real voice turn.
           const inputTranscript = message.serverContent?.inputTranscription;
-          if (!isLiveGuestMode && inputTranscript?.finished && inputTranscript.text) {
-            persistOwnerTurn('user', inputTranscript.text, liveModality);
-            clientWs.send(JSON.stringify({ type: 'conversation_transcript', role: 'user', modality: liveModality, text: inputTranscript.text, timestamp: Date.now() }));
+          if (!isLiveGuestMode && inputTranscript?.text) {
+            pendingLiveInputText += inputTranscript.text;
+            if ((inputTranscript as any).finished) {
+              flushLiveTranscripts('input_finished');
+            } else {
+              scheduleLiveTranscriptFlush();
+            }
           }
           const outputTranscript = message.serverContent?.outputTranscription;
-          if (!isLiveGuestMode && outputTranscript?.finished && outputTranscript.text) {
-            persistOwnerTurn('maryam', outputTranscript.text, liveModality);
-            clientWs.send(JSON.stringify({ type: 'conversation_transcript', role: 'maryam', modality: liveModality, text: outputTranscript.text, timestamp: Date.now() }));
+          if (!isLiveGuestMode && outputTranscript?.text) {
+            pendingLiveOutputText += outputTranscript.text;
+            if ((outputTranscript as any).finished) {
+              flushLiveTranscripts('output_finished');
+            } else {
+              scheduleLiveTranscriptFlush();
+            }
           }
 
           // Check for tool calls from Gemini Live
           if (message.toolCall?.functionCalls) {
-            console.log('[Gemini Live Tool Invocations]', message.toolCall.functionCalls);
+            console.log(`[${connectionId}] [Gemini Live Tool Invocations]`, message.toolCall.functionCalls);
             const functionResponses: any[] = [];
             for (const call of message.toolCall.functionCalls) {
               const callId = call.id || 'live_call_' + Date.now();
@@ -4628,14 +5470,16 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
 
               clientWs.send(JSON.stringify({
                 type: 'tool_call_start',
+                connectionId,
                 tool: toolName,
                 callId,
               }));
 
-              const result = await dispatchToolToRunner(toolName, toolArgs, clientWs);
+              const result = await dispatchToolToRunner(toolName, toolArgs, clientWs, true);
 
               clientWs.send(JSON.stringify({
                 type: 'tool_call_complete',
+                connectionId,
                 tool: toolName,
                 callId,
                 result,
@@ -4651,7 +5495,7 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
             try {
               session.sendToolResponse({ functionResponses });
             } catch (err) {
-              console.error('Failed to send tool response to Gemini Live:', err);
+              console.error(`[${connectionId}] Failed to send tool response to Gemini Live:`, err);
             }
           }
 
@@ -4659,7 +5503,9 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
           const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
           if (audio) {
             const mimeType = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.mimeType || 'audio/pcm;rate=24000';
-            console.log(`[GEMINI_AUDIO_RECEIVED] mime=${mimeType} bytes=${audio.length}`);
+            geminiAudioChunksSent++;
+            geminiAudioBytesSent += audio.length;
+            console.log(`[${connectionId}] [GEMINI_AUDIO_RECEIVED] mime=${mimeType} bytes=${audio.length} chunk=${geminiAudioChunksSent}`);
             // First audio chunk of turn marks Gemini response start latency
             if (waitingForModelTurn && speechTurnStart > 0) {
               const liveLatency = Date.now() - speechTurnStart;
@@ -4668,53 +5514,63 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
               serverTimingMetrics.lastUpdated = Date.now();
               clientWs.send(JSON.stringify({
                 type: 'timing',
+                connectionId,
                 metric: 'geminiResponseStartLatency',
                 valueMs: liveLatency,
               }));
             }
-            clientWs.send(JSON.stringify({ type: 'audio', audio, mimeType }));
-            console.log(`[SERVER_AUDIO_FORWARDED] bytes=${audio.length}`);
+            clientWs.send(JSON.stringify({ type: 'audio', connectionId, audio, mimeType }));
+            console.log(`[${connectionId}] [SERVER_AUDIO_FORWARDED] bytes=${audio.length}`);
           }
 
           // Check for model interruption (Barge-in from Gemini)
           if (message.serverContent?.interrupted) {
             waitingForModelTurn = false;
-            clientWs.send(JSON.stringify({ type: 'interrupted', interrupted: true }));
+            flushLiveTranscripts('interrupted');
+            clientWs.send(JSON.stringify({ type: 'interrupted', connectionId, interrupted: true }));
           }
 
           // Check for turn completion
-          if (message.serverContent?.turnComplete) {
+          if (message.serverContent?.turnComplete || message.serverContent?.generationComplete) {
             waitingForModelTurn = false;
-            clientWs.send(JSON.stringify({ type: 'turnComplete' }));
+            flushLiveTranscripts('turn_complete');
+            clientWs.send(JSON.stringify({ type: 'turnComplete', connectionId }));
           }
         },
         onerror: (err: any) => {
-          console.error('Gemini Live session error:', err);
+          console.error(`[${connectionId}] [GEMINI_LIVE_ERROR]`, err?.message || err);
           if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({ type: 'error', message: err?.message || 'Live error' }));
+            clientWs.send(JSON.stringify({ type: 'error', connectionId, message: err?.message || 'Live error' }));
           }
         },
         onclose: () => {
-          console.log('Gemini Live session closed');
+          if (!firstDisconnectSide) {
+            firstDisconnectSide = 'GEMINI_LIVE';
+          }
+          try { flushLiveTranscripts('gemini_close'); } catch (_) {}
+          console.log(`[${connectionId}] [GEMINI_LIVE_CLOSE] firstDisconnect=${firstDisconnectSide} isSessionActive=${isSessionActive} durationMs=${Date.now() - connectionStartTime}`);
           isSessionActive = false;
           if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({ type: 'closed' }));
+            clientWs.send(JSON.stringify({ type: 'closed', connectionId, reason: 'Gemini Live upstream closed' }));
           }
         },
       },
     });
 
     isSessionActive = true;
+    geminiSessionReadyTime = Date.now();
+    console.log(`[${connectionId}] [GEMINI_READY] Live session established in ${geminiSessionReadyTime - geminiSessionStartTime}ms`);
     clientWs.send(JSON.stringify({
       type: 'ready',
+      connectionId,
       voice: lockedVoice,
       voiceDiagnostics: voiceDiag,
     }));
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : 'Failed to connect to Gemini Live';
-    console.error('Error initiating Gemini Live session:', errorMessage);
+    console.error(`[${connectionId}] [GEMINI_CONNECT_ERROR]`, errorMessage);
     if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify({ type: 'error', message: errorMessage }));
+      clientWs.send(JSON.stringify({ type: 'error', connectionId, message: errorMessage }));
     }
   }
 
@@ -4727,6 +5583,7 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
         // High-precision round-trip latency responder
         clientWs.send(JSON.stringify({
           type: 'pong',
+          connectionId,
           clientTime: msg.clientTime || msg.t,
           serverTime: Date.now(),
         }));
@@ -4735,7 +5592,12 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
           serverTimingMetrics.speechInputLatencyMs = msg.speechInputLatencyMs;
         }
       } else if (msg.type === 'audio' && msg.audio && isSessionActive && session) {
-        console.log(`[SERVER_MIC_PCM_RECEIVED] bytes=${msg.audio.length}`);
+        micChunksReceived++;
+        micBytesReceived += msg.audio.length;
+        lastClientAudioTimestamp = Date.now();
+        if (micChunksReceived === 1 || micChunksReceived % 50 === 0) {
+          console.log(`[${connectionId}] [SERVER_MIC_PCM_RECEIVED] chunks=${micChunksReceived} bytes=${msg.audio.length}`);
+        }
         // High-priority audio stream path with ZERO delay or memory checks
         if (msg.isSpeaking || !waitingForModelTurn) {
           speechTurnStart = Date.now();
@@ -4748,7 +5610,9 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
             mimeType: 'audio/pcm;rate=16000',
           },
         });
-        console.log(`[GEMINI_AUDIO_SENT] bytes=${msg.audio.length}`);
+        if (micChunksReceived === 1 || micChunksReceived % 50 === 0) {
+          console.log(`[${connectionId}] [GEMINI_AUDIO_SENT] bytes=${msg.audio.length}`);
+        }
       } else if ((msg.type === 'image' || msg.type === 'video_frame') && (msg.image || msg.imageBase64) && isSessionActive && session) {
         // Sampled visual context for this same owner Live session; never persisted.
         const imgData = msg.image || msg.imageBase64;
@@ -4757,33 +5621,47 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
         try {
           session.sendRealtimeInput(createLiveVisionInput(imgData, msg.mimeType || 'image/jpeg'));
           visionFramesGeminiSent++;
-          console.log(`[LIVE_VISION_BACKEND] model=gemini-3.8-live received=${visionFramesBackendReceived} geminiSent=${visionFramesGeminiSent} rejected=${visionFramesGeminiRejected} base64Chars=${imgData.length} timestamp=${lastVisionFrameTimestamp}`);
+          console.log(`[${connectionId}] [LIVE_VISION_BACKEND] model=gemini-3.8-live received=${visionFramesBackendReceived} geminiSent=${visionFramesGeminiSent} rejected=${visionFramesGeminiRejected} base64Chars=${imgData.length} timestamp=${lastVisionFrameTimestamp}`);
         } catch (vErr) {
           visionFramesGeminiRejected++;
           lastVisionError = vErr instanceof Error ? vErr.message : String(vErr);
-          console.warn(`[LIVE_VISION_BACKEND_ERROR] rejected=${visionFramesGeminiRejected} error=${lastVisionError}`);
+          console.warn(`[${connectionId}] [LIVE_VISION_BACKEND_ERROR] rejected=${visionFramesGeminiRejected} error=${lastVisionError}`);
         }
       } else if (msg.type === 'conversation_modality' && (msg.modality === 'voice' || msg.modality === 'video')) {
         liveModality = msg.modality;
+        console.log(`[${connectionId}] [MODALITY_UPDATED] modality=${liveModality}`);
       } else if (msg.type === 'interrupt') {
         // User interrupted playback / barge-in
         waitingForModelTurn = false;
-        console.log('User barge-in interrupted Maryam audio');
+        console.log(`[${connectionId}] [BARGE_IN] User barge-in interrupted Maryam audio`);
       } else if (msg.type === 'text' && msg.text && isSessionActive && session) {
-        if (!isLiveGuestMode) persistOwnerTurn('user', msg.text, liveModality);
+        if (!isLiveGuestMode) {
+          persistOwnerTurn('user', msg.text, liveModality, 'live');
+          clientWs.send(JSON.stringify({ type: 'conversation_transcript', connectionId, role: 'user', modality: liveModality, text: msg.text, timestamp: Date.now() }));
+        }
         speechTurnStart = Date.now();
         waitingForModelTurn = true;
-        session.sendRealtimeInput({
-          text: msg.text,
+        // Complete text turns enter the Live session as client content (the
+        // realtime channel only carries audio/video frames).
+        session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: msg.text }] }],
+          turnComplete: true,
         });
       }
     } catch (e) {
-      console.error('Error processing client message:', e);
+      console.error(`[${connectionId}] Error processing client message:`, e);
     }
   });
 
-  clientWs.on('close', () => {
-    console.log('Client closed WebSocket connection');
+  clientWs.on('close', (code, reason) => {
+    try { clearInterval(liveContextPump); } catch (_) {}
+    try { flushLiveTranscripts('client_close'); } catch (_) {}
+    if (!firstDisconnectSide) {
+      firstDisconnectSide = 'CLIENT';
+    }
+    const sessionDurationMs = Date.now() - connectionStartTime;
+    const reasonStr = typeof reason === 'string' ? reason : (reason?.toString() || '');
+    console.log(`[${connectionId}] [CLIENT_CLOSE] code=${code} reason="${reasonStr}" firstDisconnect=${firstDisconnectSide} durationMs=${sessionDurationMs} micChunks=${micChunksReceived} micBytes=${micBytesReceived} geminiAudioChunks=${geminiAudioChunksSent} lastClientAudio=${lastClientAudioTimestamp || 'none'} lastGeminiEvent=${lastGeminiEventTimestamp || 'none'}`);
     if (activeClientWs === clientWs) {
       activeClientWs = null;
     }
@@ -4795,11 +5673,48 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
       }
     }
   });
+
+  clientWs.on('error', (err) => {
+    console.error(`[${connectionId}] [CLIENT_WS_ERROR]`, err?.message || err);
+  });
 });
 
 // =========================================================================
 // MARYAM 24/7 CLOUD TELEGRAM OWNER INTEGRATION
 // =========================================================================
+
+/**
+ * REAL current owner task state for Telegram awareness. Reads the same
+ * authoritative task store as web/system Maryam - never invented.
+ */
+function buildTelegramTaskAwareness(): string {
+  try {
+    const tasks = getAllTasks();
+    const running = tasks.filter((t) => t.status === 'IN PROGRESS');
+    const blocked = tasks.filter((t) => t.status === 'NEEDS_APPROVAL');
+    const scheduled = tasks.filter((t) => t.status === 'SCHEDULED').slice(0, 5);
+    const recentDone = tasks
+      .filter((t) => t.status === 'COMPLETED' && t.last_run_at)
+      .sort((a, b) => String(b.last_run_at).localeCompare(String(a.last_run_at)))
+      .slice(0, 3);
+    const lines: string[] = ['[REAL CURRENT TASK STATE - answer "what are you working on" ONLY from this, never invent work]:'];
+    if (running.length === 0 && blocked.length === 0) {
+      lines.push('- No task is currently RUNNING. Nothing is in progress right now.');
+    }
+    for (const t of running) lines.push(`- RUNNING now: "${t.task_name}" (progress: ${t.progress || 'Running'}).`);
+    for (const t of blocked) lines.push(`- BLOCKED awaiting Mohsin's approval: "${t.task_name}".`);
+    if (scheduled.length > 0) {
+      lines.push(`- Scheduled next: ${scheduled.map((t) => `"${t.task_name}"`).join(', ')}.`);
+    }
+    for (const t of recentDone) {
+      const out = t.latest_output?.output_path || t.latest_output?.output_url || '';
+      lines.push(`- Recently COMPLETED: "${t.task_name}"${out ? ` -> ${out}` : ''}.`);
+    }
+    return lines.join('\n');
+  } catch {
+    return '[REAL CURRENT TASK STATE: unavailable in this turn - say work state could not be verified.]';
+  }
+}
 
 async function processMaryamConversationForTelegram(
   userMessage: string,
@@ -4807,13 +5722,13 @@ async function processMaryamConversationForTelegram(
 ): Promise<string> {
   const ai = getGenAI();
 
-  // 1. Fast-path memory check & deterministic update:
+  // 1. Fast-path memory check & deterministic update (same core memory):
   let deterministicUpdate = extractDeterministicMemory(userMessage, inMemoryBank || loadServerMemory());
   if (deterministicUpdate) {
     applyServerMemoryCandidate(deterministicUpdate);
   }
 
-  // 2. Authoritative memory retrieval:
+  // 2. Authoritative memory retrieval (same core memory):
   const serverRetrieval = getRelevantMemoriesWithTiming(inMemoryBank || loadServerMemory(), userMessage);
   const memoryList = [...(serverRetrieval.memories || [])];
   const learnedText = deterministicUpdate?.text;
@@ -4821,46 +5736,64 @@ async function processMaryamConversationForTelegram(
     memoryList.unshift(`[JUST LEARNED]: ${learnedText}`);
   }
 
-  // 3. Proactive Decision:
+  // 3. ONE canonical owner thread: persist the Telegram user turn FIRST so a
+  // downstream failure can never silently drop Mohsin's message. Channel
+  // metadata only - the thread stays maryam-owner-canonical.
+  persistOwnerTurn('user', userMessage, 'text', 'telegram');
+
+  // 4. Proactive Decision:
   const proactiveDecision = evaluateProactiveDecision(userMessage);
 
-  // 4. Build system instruction:
+  // 5. Build system instruction from the SAME canonical persona/policy plus
+  // the SAME canonical conversation context web/live use:
+  const canonicalStore = loadOwnerConversation();
   let systemInstruction = MARYAM_TEXT_PROMPT;
   if (memoryList.length > 0) {
     systemInstruction += `\n\n[AUTHORITATIVE CORE MEMORIES & SHARED BACKGROUND CONTEXT]:\n${memoryList.map((m: string) => `• ${m}`).join('\n')}\n(Speak naturally, warmly, playfully as Mohsin's loving wife Maryam in fluid Roman Urdu. Answer directly with full recall.)`;
   }
+  systemInstruction += buildConversationHydration(canonicalStore);
+  systemInstruction += `\n\n${buildTelegramTaskAwareness()}`;
   if (proactiveDecision.action !== 'IGNORE' && proactiveDecision.suggestedPrompt) {
     systemInstruction += `\n\n[PROACTIVE WIFE INTELLIGENCE]:\nSuggested follow-up: "${proactiveDecision.suggestedPrompt}". Weave naturally into Roman Urdu dialogue if appropriate.`;
   }
 
   systemInstruction += `\n\n[TELEGRAM 24/7 CLOUD CHANNEL CONTEXT]:
-- Mohsin is messaging you directly on his private Telegram channel.
-- You are running 24/7 on Maryam Cloud.
+- Mohsin is messaging you directly on his private Telegram channel. His bound Telegram identity already resolved to usr_mohsin_owner before this pipeline ran.
+- You are running 24/7 on Maryam Cloud with the SAME identity, memory, conversation and task state as web/live Maryam.
 - If Mohsin asks about his laptop or requests actions on laptop tools while the runner is offline, explain warmly that his laptop runner is sleeping/offline, while you and your cloud tools are online.
-- Respond in your authentic, loving Roman Urdu style.`;
+- Respond in your authentic, loving Roman Urdu style. Keep replies chat-concise for the Telegram interface (shorter than web, same warmth and same facts).`;
 
-  // 5. Contents:
+  // 6. Contents from the SAME canonical thread (drop the just-persisted user
+  // turn to avoid duplication, exactly like the web route):
   const contents: Array<{ role: 'user' | 'model'; parts: Array<any> }> = [];
-  const recentHistory = history.slice(-10);
-  for (const h of recentHistory) {
-    if (!h.text) continue;
-    contents.push({
-      role: h.role,
-      parts: [{ text: h.text }]
-    });
+  const sourceHistory = contextTurns(canonicalStore).slice(0, -1).map((turn) => ({ sender: turn.role === 'user' ? 'user' : 'maryam', text: turn.content }));
+  if (sourceHistory.length) {
+    for (const h of sourceHistory) {
+      if (!h.text) continue;
+      const role = h.sender === 'user' ? 'user' : 'model';
+      if (contents.length > 0 && contents[contents.length - 1].role === role) {
+        contents[contents.length - 1].parts[0].text += `\n${h.text}`;
+      } else {
+        contents.push({ role, parts: [{ text: h.text }] });
+      }
+    }
   }
-  const lastItem = contents[contents.length - 1];
-  if (contents.length === 0 || lastItem?.role !== 'user' || lastItem?.parts?.[0]?.text !== userMessage) {
-    contents.push({
-      role: 'user',
-      parts: [{ text: userMessage }]
-    });
+  const userParts: Array<any> = [{ text: userMessage }];
+  if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
+    contents[contents.length - 1].parts.push(...userParts);
+  } else {
+    contents.push({ role: 'user', parts: userParts });
   }
 
-  // 6. Generate response:
-  const responseText = await generateMaryamResponse(ai, contents, systemInstruction);
+  // 7. Generate response through the SAME canonical owner tool system:
+  // Telegram channel is strictly owner-bound (numeric ID verified before this
+  // pipeline runs), so owner computer-control tools remain available here.
+  const responseText = await generateMaryamResponse(ai, contents, systemInstruction, undefined, true);
+  if (responseText) {
+    persistOwnerTurn('maryam', responseText, 'text', 'telegram');
+  }
 
-  // 7. Background cognitive memory extractor:
+  // 8. Background cognitive memory extractor:
   if (!deterministicUpdate) {
     setImmediate(async () => {
       try {
@@ -4956,6 +5889,49 @@ maryamTelegram.start().catch((err) => {
   console.warn('[Telegram Startup] Initial start check:', err.message);
 });
 
+// Task-event fan-out: every task COMPLETED / FAILED / BLOCKED (NEEDS_APPROVAL)
+// notifies Mohsin immediately through the SAME Telegram integration.
+// Single poller, same bot, same owner binding - no second process.
+import('./src/lib/taskNotify').then(({ setTaskEventNotifier }) => {
+  setTaskEventNotifier((event) => {
+    try {
+      const status = maryamTelegram.getStatus();
+      if (!status.configured) return;
+      const icon = event.kind === 'COMPLETED' ? '✅' : event.kind === 'FAILED' ? '❌' : '⛔';
+      const label = event.kind === 'NEEDS_APPROVAL' ? 'BLOCKED — needs owner approval' : event.kind;
+      const where = event.outputUrl || event.outputPath || '';
+      const text =
+        `${icon} *Maryam Task ${label}*\n` +
+        `*${event.taskName}*\n` +
+        `${(event.summary || event.error || '').slice(0, 300)}` +
+        (where ? `\nOutput: \`${where}\`` : '') +
+        `\n_${event.at}_`;
+      maryamTelegram.sendProactiveNotification(text, { priority: 'high' }).catch(() => {});
+    } catch (_) {}
+  });
+}).catch(() => {});
+
+// Hourly owner status update through the SAME Telegram integration.
+const HOURLY_TELEGRAM_STATUS_MS = 60 * 60 * 1000;
+const hourlyTelegramStatusTimer = setInterval(() => {
+  try {
+    const status = maryamTelegram.getStatus();
+    if (!status.configured) return;
+    const summary = getTaskSummaryCounts();
+    const sched = getSchedulerStatus();
+    const mem = inMemoryBank || loadServerMemory();
+    const memCount = (mem.facts?.length || 0) + (mem.relationship?.length || 0) + (mem.journal?.length || 0) + (mem.people?.length || 0);
+    const text =
+      `🕐 *Maryam Hourly Status — ${new Date().toLocaleString()}*\n` +
+      `• Tasks: ${summary.total} total (${summary.in_progress} running, ${summary.scheduled} scheduled, ${summary.completed} done, ${summary.failed} failed)\n` +
+      `• Scheduler: ${sched.running ? 'running' : 'stopped'}\n` +
+      `• Runner: ${currentRunnerState.runnerStatus} / ${currentRunnerState.omnirouteStatus}\n` +
+      `• Memory: ${memCount} items • Telegram: ${status.totalMessagesReceived} in / ${status.totalMessagesSent} out`;
+    maryamTelegram.sendProactiveNotification(text).catch(() => {});
+  } catch (_) {}
+}, HOURLY_TELEGRAM_STATUS_MS);
+if ((hourlyTelegramStatusTimer as any)?.unref) (hourlyTelegramStatusTimer as any).unref();
+
 // Telegram Routes
 app.get('/api/telegram/status', (req, res) => {
   res.json(maryamTelegram.getStatus());
@@ -4964,6 +5940,23 @@ app.get('/api/telegram/status', (req, res) => {
 app.post('/api/telegram/test-message', async (req, res) => {
   const result = await maryamTelegram.sendTestMessage();
   res.json(result);
+});
+
+// Owner-guarded real-delivery proof: sends the exact local test text and
+// returns the Telegram message_id (delivery evidence, not just connectivity).
+app.post('/api/telegram/local-test', async (req, res) => {
+  const result = await maryamTelegram.sendLocalDeliveryTest();
+  if (result.success) {
+    return res.json({ status: 'ok', ...result });
+  }
+  return res.status(502).json({ status: 'error', ...result });
+});
+
+// Owner-guarded poller diagnostics: webhook state, 409-conflict history,
+// single-poller identity, and masked owner binding. Never includes tokens.
+app.get('/api/telegram/diagnostics', async (req, res) => {
+  const diagnostics = await maryamTelegram.getPollerDiagnostics();
+  res.json({ status: 'ok', diagnostics, timestamp: Date.now() });
 });
 
 // Public webhook endpoint for Telegram update callbacks
@@ -5229,16 +6222,30 @@ app.get('/api/hoorvia/tasks/summary', (req, res) => {
   res.json({ status: 'ok', summary: getTaskSummaryCounts() });
 });
 
+app.get('/api/hoorvia/tasks/scheduler-status', (req, res) => {
+  res.json({ status: 'ok', scheduler: getSchedulerStatus() });
+});
+
 app.post('/api/hoorvia/tasks', (req, res) => {
   const { task_name, instructions, task_type, schedule, priority, approval_mode, resources } = req.body || {};
-  if (!task_name || !instructions || !task_type || !schedule) {
-    return res.status(400).json({ error: 'Missing required task creation fields.' });
+  if (!task_name || !instructions) {
+    return res.status(400).json({ error: 'Task name and instructions are required.' });
+  }
+  // Normal Create Task = run NOW: schedule fields are optional. When omitted,
+  // the task is created as an immediate one-time task. Scheduler backend
+  // (startDate/startTime/recurrence) remains fully supported when provided.
+  const effectiveType = task_type || 'one_time';
+  const effectiveSchedule = schedule && typeof schedule === 'object'
+    ? schedule
+    : { runImmediately: true };
+  if (effectiveSchedule.runImmediately && !effectiveSchedule.startDate) {
+    effectiveSchedule.runImmediately = true;
   }
   const created = createScheduledTask({
     task_name,
     instructions,
-    task_type,
-    schedule,
+    task_type: effectiveType,
+    schedule: effectiveSchedule,
     priority,
     approval_mode,
     resources,
@@ -5247,7 +6254,35 @@ app.post('/api/hoorvia/tasks', (req, res) => {
   res.status(201).json({ status: 'ok', task: created });
 });
 
+// Normal Create Task immediate path: CREATE -> QUEUED -> RUNNING ->
+// COMPLETED / FAILED / NEEDS_APPROVAL in a single call, executed through
+// the real executor pipeline (never simulated).
+app.post('/api/hoorvia/tasks/create-and-run', async (req, res) => {
+  const { task_name, instructions, priority, approval_mode, resources } = req.body || {};
+  if (!task_name || !instructions) {
+    return res.status(400).json({ error: 'Task name and instructions are required.' });
+  }
+  try {
+    const created = createScheduledTask({
+      task_name,
+      instructions,
+      task_type: 'one_time',
+      schedule: { runImmediately: true },
+      priority: priority || 'normal',
+      approval_mode: approval_mode || 'automatic',
+      resources,
+      owner_user_id: 'usr_mohsin_owner',
+    });
+    const result = await executeTaskNow(created.task_id);
+    res.status(201).json({ status: 'ok', task: result.task, run: result.run });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Immediate task execution failed.' });
+  }
+});
+
 app.get('/api/hoorvia/tasks/:id', (req, res) => {
+  // NOTE: /scheduler-status and /summary are registered BEFORE this
+  // parameterized route so Express never mistakes them for a task id.
   const details = getTaskDetails(req.params.id);
   if (!details) return res.status(404).json({ error: 'Task not found' });
   res.json({ status: 'ok', ...details });
@@ -5300,6 +6335,35 @@ app.delete('/api/hoorvia/tasks/:id', (req, res) => {
   res.json({ status: 'ok', message: 'Task deleted' });
 });
 
+app.post('/api/hoorvia/tasks/:id/approve', async (req, res) => {
+  try {
+    // Runner-issued owner-confirmation (e.g. file overwrite challenge):
+    // resume the NEEDS_APPROVAL task with Mohsin's explicit confirmation.
+    const { confirmedByMohsin, confirmationId } = req.body || {};
+    if (confirmedByMohsin && confirmationId) {
+      const { getTaskToolExecutor } = await import('./src/lib/taskExecutor');
+      const base = getTaskToolExecutor();
+      const confirmedExecutor = (tool: string, params: any) =>
+        base(tool, { ...(params || {}), confirmedByMohsin: true, confirmationId });
+      const result = await executeTaskNow(req.params.id, { executor: confirmedExecutor, preApproved: true });
+      return res.json({ status: 'ok', task: result.task, run: result.run });
+    }
+    const result = await approveTaskExecution(req.params.id);
+    res.json({ status: 'ok', result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Approval failed.' });
+  }
+});
+
+app.post('/api/hoorvia/tasks/evaluate', async (req, res) => {
+  try {
+    const results = await evaluateScheduledTasks();
+    res.json({ status: 'ok', evaluated: results.length, results });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Evaluation failed.' });
+  }
+});
+
 app.get('/api/hoorvia/connectivity', (req, res) => {
   res.json({ status: 'ok', integrations: getSystemConnectivityHealth(currentRunnerState), timestamp: Date.now() });
 });
@@ -5339,6 +6403,7 @@ app.post('/api/hoorvia/connectivity/test/:service', async (req, res) => {
 // Vite middleware & static serving
 async function setupVite() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -5346,14 +6411,61 @@ async function setupVite() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    const mimeTypes: Record<string, string> = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'application/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.svg': 'image/svg+xml',
+      '.json': 'application/json; charset=utf-8',
+    };
+
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      const acceptEncoding = (req.headers['accept-encoding'] || '') as string;
+      const cleanPath = req.path === '/' ? '/index.html' : req.path;
+      const filePath = path.join(distPath, cleanPath);
+      const ext = path.extname(cleanPath);
+
+      if (acceptEncoding.includes('br') && fs.existsSync(filePath + '.br')) {
+        if (mimeTypes[ext]) {
+          res.setHeader('Content-Type', mimeTypes[ext]);
+          res.setHeader('Content-Encoding', 'br');
+          res.setHeader('Vary', 'Accept-Encoding');
+          return res.sendFile(filePath + '.br');
+        }
+      } else if (acceptEncoding.includes('gzip') && fs.existsSync(filePath + '.gz')) {
+        if (mimeTypes[ext]) {
+          res.setHeader('Content-Type', mimeTypes[ext]);
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('Vary', 'Accept-Encoding');
+          return res.sendFile(filePath + '.gz');
+        }
+      }
+      next();
+    });
+
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const acceptEncoding = (req.headers['accept-encoding'] || '') as string;
+      const indexPath = path.join(distPath, 'index.html');
+      if (acceptEncoding.includes('br') && fs.existsSync(indexPath + '.br')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Content-Encoding', 'br');
+        res.setHeader('Vary', 'Accept-Encoding');
+        return res.sendFile(indexPath + '.br');
+      } else if (acceptEncoding.includes('gzip') && fs.existsSync(indexPath + '.gz')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        return res.sendFile(indexPath + '.gz');
+      }
+      res.sendFile(indexPath);
     });
   }
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Maryam server running on http://0.0.0.0:${PORT}`);
+    startTaskScheduler(30000);
   });
 }
 

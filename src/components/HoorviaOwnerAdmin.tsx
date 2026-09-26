@@ -54,6 +54,7 @@ import {
 import { HoorviaCapabilitiesManager } from './HoorviaCapabilitiesManager';
 import { HoorviaTelegramManager } from './HoorviaTelegramManager';
 import { HoorviaWhatsAppManager } from './HoorviaWhatsAppManager';
+import { getOwnerToken } from '../lib/ownerAuth';
 
 interface HoorviaOwnerAdminProps {
   token: string;
@@ -438,7 +439,8 @@ export const HoorviaOwnerAdmin: React.FC<HoorviaOwnerAdminProps> = ({ token, onC
     }
 
     setRevealingKeyUser(userId);
-    const activeAuthToken = token || localStorage.getItem('hoorvia_user_token') || 'owner_secret_dev_session';
+    // Canonical owner session token only - never a placeholder/dev value.
+    const activeAuthToken = token || getOwnerToken() || '';
     try {
       const res = await fetch('/api/hoorvia/admin/users/reveal-key', {
         method: 'POST',

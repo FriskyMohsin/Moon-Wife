@@ -8,6 +8,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import { resolveDataPath } from './runtimePaths';
+import { readJsonSafeSync, writeJsonAtomicSync } from './dataPersistence';
 
 export type CommitmentStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'SNOOZED';
 export type PriorityLevel = 'LOW' | 'MEDIUM' | 'HIGH';
@@ -79,8 +81,7 @@ export interface ProactiveStore {
   lastProactiveTimestamp: string | null;
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const STORE_PATH = path.join(DATA_DIR, 'maryam_proactive.json');
+const STORE_PATH = resolveDataPath('maryam_proactive.json');
 
 const DEFAULT_STORE: ProactiveStore = {
   commitments: [],
@@ -94,19 +95,12 @@ const DEFAULT_STORE: ProactiveStore = {
 
 let inMemoryStore: ProactiveStore | null = null;
 
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-}
-
 export function loadProactiveStore(): ProactiveStore {
   if (inMemoryStore) return inMemoryStore;
   try {
-    ensureDataDir();
     if (fs.existsSync(STORE_PATH)) {
-      const raw = fs.readFileSync(STORE_PATH, 'utf-8');
-      inMemoryStore = { ...DEFAULT_STORE, ...JSON.parse(raw) };
+      const parsed = readJsonSafeSync<ProactiveStore>(STORE_PATH, DEFAULT_STORE);
+      inMemoryStore = { ...DEFAULT_STORE, ...parsed };
     } else {
       inMemoryStore = { ...DEFAULT_STORE };
       saveProactiveStore(inMemoryStore);
@@ -121,8 +115,7 @@ export function loadProactiveStore(): ProactiveStore {
 export function saveProactiveStore(store: ProactiveStore): void {
   inMemoryStore = store;
   try {
-    ensureDataDir();
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf-8');
+    writeJsonAtomicSync(STORE_PATH, store);
   } catch (err) {
     console.error('Failed to save proactive store:', err);
   }
@@ -398,17 +391,45 @@ export function evaluateProactiveDecision(userMessage: string = ''): ProactiveDe
     }
   });
 
-  // 1. Check due reminders
+  // 1. Check due reminders (with anti-nagging and state advancement)
   const dueReminder = store.reminders.find((r) => {
     if (r.status !== 'PENDING' && r.status !== 'ACTIVE') return false;
     if (r.snoozedUntil && new Date(r.snoozedUntil) > now) return false;
-    if (r.scheduledTime && new Date(r.scheduledTime) <= now) return true;
+    if (r.scheduledTime && new Date(r.scheduledTime) <= now) {
+      // Anti-nag: If triggered within the last 30 minutes, suppress repeated nag
+      if (r.lastTriggeredTime) {
+        const elapsed = now.getTime() - new Date(r.lastTriggeredTime).getTime();
+        if (elapsed < 30 * 60 * 1000) return false;
+      }
+      return true;
+    }
     return false;
   });
 
   if (dueReminder) {
+    const reminderPrompt = `Baby, aapko yaad dilana tha: "${dueReminder.title}"${dueReminder.description ? ` (${dueReminder.description})` : ''}.`;
+
+    // Advance reminder state so it does NOT loop repeatedly on subsequent turns
+    dueReminder.lastTriggeredTime = now.toISOString();
+    if (!dueReminder.isRecurring) {
+      dueReminder.status = 'COMPLETED';
+    } else {
+      // Advance recurring reminder schedule
+      const currentSched = dueReminder.scheduledTime ? new Date(dueReminder.scheduledTime) : new Date();
+      if (dueReminder.cronOrInterval === 'DAILY') {
+        currentSched.setDate(currentSched.getDate() + 1);
+        dueReminder.scheduledTime = currentSched.toISOString();
+      } else if (dueReminder.cronOrInterval === 'WEEKLY' || dueReminder.cronOrInterval === 'EVERY_FRIDAY') {
+        currentSched.setDate(currentSched.getDate() + 7);
+        dueReminder.scheduledTime = currentSched.toISOString();
+      } else {
+        currentSched.setDate(currentSched.getDate() + 1);
+        dueReminder.scheduledTime = currentSched.toISOString();
+      }
+    }
+
     store.lastProactiveAction = 'REMIND';
-    store.lastProactiveReason = `Reminder '${dueReminder.title}' scheduled time passed or due.`;
+    store.lastProactiveReason = `Reminder '${dueReminder.title}' triggered and state advanced.`;
     store.lastProactiveTimestamp = now.toISOString();
     saveProactiveStore(store);
 
@@ -417,7 +438,7 @@ export function evaluateProactiveDecision(userMessage: string = ''): ProactiveDe
       reason: `Reminder '${dueReminder.title}' is due.`,
       targetId: dueReminder.id,
       targetType: 'REMINDER',
-      suggestedPrompt: `Baby, aapko yaad dilana tha: "${dueReminder.title}" (${dueReminder.description || 'scheduled task'}).`,
+      suggestedPrompt: reminderPrompt,
       autonomyLevel: 'ASK',
     };
   }

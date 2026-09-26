@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { IntegrationHealthInfo, ConnectionState } from '../types/taskManagement';
 import { LocalRunnerState, isRunnerOnline } from '../types';
+import { getOwnerToken } from '../lib/ownerAuth';
 
 interface ConnectivityViewProps {
   runnerState: LocalRunnerState;
@@ -129,10 +130,12 @@ export const ConnectivityView: React.FC<ConnectivityViewProps> = ({
   const fetchConnectivity = useCallback(async () => {
     setIsLoading(true);
     try {
+      // Canonical owner session token (prop first, stored session as fallback).
+      const effectiveToken = authToken || getOwnerToken();
       const headers: Record<string, string> = {};
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveToken) {
+        headers['x-hoorvia-token'] = effectiveToken;
+        headers['Authorization'] = `Bearer ${effectiveToken}`;
       }
       const res = await fetch('/api/hoorvia/connectivity', { headers });
       if (res.ok) {
@@ -156,10 +159,11 @@ export const ConnectivityView: React.FC<ConnectivityViewProps> = ({
     setTestingServiceId(serviceId);
     setActionFeedback(null);
     try {
+      const effectiveToken = authToken || getOwnerToken();
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveToken) {
+        headers['x-hoorvia-token'] = effectiveToken;
+        headers['Authorization'] = `Bearer ${effectiveToken}`;
       }
       const res = await fetch(`/api/hoorvia/connectivity/test/${serviceId}`, {
         method: 'POST',

@@ -36,6 +36,13 @@ export interface TelegramConfigStatus {
   totalMessagesSent: number;
   unauthorizedAttemptsBlocked: number;
   activeApprovalsCount: number;
+  // Duplicate-poller conflict visibility: a second getUpdates consumer (or a
+  // set webhook) makes delivery silently fail while status looks CONNECTED.
+  pollConflict: boolean;
+  pollConflictCount: number;
+  lastPollConflictAt: string | null;
+  pollerPid: number | null;
+  pollerStartedAt: string | null;
 }
 
 export interface TelegramApproval {
@@ -99,6 +106,10 @@ class MaryamTelegramService {
   private totalMessagesReceived: number = 0;
   private totalMessagesSent: number = 0;
   private unauthorizedAttemptsBlocked: number = 0;
+  // Duplicate-poller (409 getUpdates conflict) tracking
+  private pollConflictCount: number = 0;
+  private lastPollConflictAt: string | null = null;
+  private pollerStartedAt: string | null = null;
 
   constructor() {
     this.refreshCredentials();
@@ -108,9 +119,9 @@ class MaryamTelegramService {
    * Refreshes credentials from environment variables securely without logging secrets.
    */
   public refreshCredentials(): void {
-    const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
-    const ownerUser = (process.env.TELEGRAM_OWNER_USER_ID || '').trim();
-    const ownerChat = (process.env.TELEGRAM_OWNER_CHAT_ID || ownerUser).trim();
+    const token = (process.env.TELEGRAM_BOT_TOKEN || process.env.MARYAM_TELEGRAM_BOT_TOKEN || '').trim();
+    const ownerUser = (process.env.TELEGRAM_OWNER_USER_ID || process.env.MARYAM_TELEGRAM_OWNER_USER_ID || '').trim();
+    const ownerChat = (process.env.TELEGRAM_OWNER_CHAT_ID || process.env.MARYAM_TELEGRAM_OWNER_CHAT_ID || ownerUser).trim();
     const webhookSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
 
     this.botToken = token;
@@ -165,7 +176,77 @@ class MaryamTelegramService {
       totalMessagesSent: this.totalMessagesSent,
       unauthorizedAttemptsBlocked: this.unauthorizedAttemptsBlocked,
       activeApprovalsCount: Array.from(this.activeApprovals.values()).filter(a => !a.used && a.expiresAt > Date.now()).length,
+      pollConflict: this.pollConflictCount > 0 && !!this.lastPollConflictAt && (Date.now() - new Date(this.lastPollConflictAt).getTime() < 10 * 60 * 1000),
+      pollConflictCount: this.pollConflictCount,
+      lastPollConflictAt: this.lastPollConflictAt,
+      pollerPid: this.isPollingActive ? process.pid : null,
+      pollerStartedAt: this.pollerStartedAt,
     };
+  }
+
+  /**
+   * Owner-guarded poller diagnostics: webhook state (masked), conflict
+   * history, and single-poller identity. Never includes token values.
+   */
+  public async getPollerDiagnostics(): Promise<{
+    webhookSet: boolean;
+    webhookPendingUpdates: number | null;
+    webhookLastError: string | null;
+    pollConflictCount: number;
+    lastPollConflictAt: string | null;
+    pollerCount: number;
+    pollerPid: number | null;
+    processPid: number;
+    isSinglePoller: boolean;
+    ownerBindingMasked: string;
+  }> {
+    let webhookSet = false;
+    let webhookPendingUpdates: number | null = null;
+    let webhookLastError: string | null = null;
+    try {
+      const info = await this.telegramApiCall('getWebhookInfo');
+      if (info && info.ok && info.result) {
+        webhookSet = !!(info.result.url && String(info.result.url).length > 0);
+        webhookPendingUpdates = typeof info.result.pending_update_count === 'number' ? info.result.pending_update_count : null;
+        webhookLastError = info.result.last_error_message || null;
+      }
+    } catch (err: any) {
+      webhookLastError = err?.message || 'getWebhookInfo failed';
+    }
+    const maskId = (id: string): string => {
+      if (!id) return 'Not Configured';
+      if (id.length <= 4) return '****';
+      return '****' + id.slice(-4);
+    };
+    return {
+      webhookSet,
+      webhookPendingUpdates,
+      webhookLastError,
+      pollConflictCount: this.pollConflictCount,
+      lastPollConflictAt: this.lastPollConflictAt,
+      pollerCount: this.isPollingActive ? 1 : 0,
+      pollerPid: this.isPollingActive ? process.pid : null,
+      processPid: process.pid,
+      isSinglePoller: this.isPollingActive,
+      ownerBindingMasked: `${maskId(this.ownerUserId)} / ${maskId(this.ownerChatId || this.ownerUserId)}`,
+    };
+  }
+
+  /**
+   * Sends the exact local-delivery proof text and returns the Telegram
+   * message_id so real delivery (not just API connectivity) is evidenced.
+   */
+  public async sendLocalDeliveryTest(): Promise<{ success: boolean; message_id?: number; chat_id?: string; error?: string }> {
+    this.refreshCredentials();
+    const targetChatId = this.ownerChatId || this.ownerUserId;
+    if (!this.botToken || !targetChatId) {
+      return { success: false, error: 'Telegram Bot Token or Owner Chat ID is missing.' };
+    }
+    const res = await this.sendMessage(targetChatId, 'Maryam local Telegram test successful.');
+    if (res && res.ok && res.result && typeof res.result.message_id === 'number') {
+      return { success: true, message_id: res.result.message_id, chat_id: String(targetChatId) };
+    }
+    return { success: false, error: (res && (res.description || res.error)) || 'Telegram API rejected message delivery' };
   }
 
   /**
@@ -187,6 +268,22 @@ class MaryamTelegramService {
     }
 
     return false;
+  }
+
+  /**
+   * Resolves the EXISTING verified Telegram owner binding to the single
+   * canonical owner identity. Only the bound numeric Telegram identity maps
+   * to usr_mohsin_owner; usernames/display names are never trusted.
+   * Returns null when no binding is configured.
+   */
+  public resolveOwnerBinding(): { ownerUserId: 'usr_mohsin_owner'; telegramUserId: string; telegramChatId: string } | null {
+    this.refreshCredentials();
+    if (!this.botToken || !this.ownerUserId) return null;
+    return {
+      ownerUserId: 'usr_mohsin_owner',
+      telegramUserId: this.ownerUserId,
+      telegramChatId: this.ownerChatId || this.ownerUserId,
+    };
   }
 
   /**
@@ -239,6 +336,8 @@ class MaryamTelegramService {
     if (this.isPollingActive) return;
     this.isPollingActive = true;
     this.connectionStatus = 'POLLING';
+    this.pollerStartedAt = new Date().toISOString();
+    console.log(`[Telegram Service] Single poller active in this process (pid ${process.pid}).`);
 
     let backoffMs = 1000;
 
@@ -254,6 +353,11 @@ class MaryamTelegramService {
 
           if (updates && updates.ok && Array.isArray(updates.result)) {
             backoffMs = 1000; // Reset backoff on success
+            // A successful poll clears a stale conflict error so the UI stops
+            // showing a resolved duplicate-poller condition.
+            if (this.lastError && /conflict|terminated by other getUpdates/i.test(this.lastError)) {
+              this.lastError = null;
+            }
             for (const update of updates.result) {
               if (update.update_id) {
                 this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
@@ -261,7 +365,14 @@ class MaryamTelegramService {
               await this.handleIncomingUpdate(update);
             }
           } else if (!updates?.ok) {
-            this.lastError = updates?.description || 'Failed to poll updates';
+            const desc: string = updates?.description || 'Failed to poll updates';
+            if (/conflict|terminated by other getUpdates/i.test(desc)) {
+              // 409: another poller (or webhook) holds this bot token. Count it
+              // explicitly instead of hiding behind a generic "POLLING" label.
+              this.pollConflictCount++;
+              this.lastPollConflictAt = new Date().toISOString();
+            }
+            this.lastError = desc;
             console.warn(`[Telegram Polling] Telegram warning: ${this.lastError}`);
             await new Promise(res => setTimeout(res, backoffMs));
             backoffMs = Math.min(backoffMs * 2, 30000);
@@ -368,6 +479,14 @@ class MaryamTelegramService {
       return;
     }
 
+    // Owner verified against the bound numeric identity: resolve to the
+    // single canonical owner BEFORE any model/persistence work. IDs masked.
+    const binding = this.resolveOwnerBinding();
+    if (!binding) {
+      console.warn('[TELEGRAM SECURITY] Owner message arrived with no configured binding; refusing canonical context.');
+      return;
+    }
+    console.log(`[Telegram Owner] Bound chat ****${String(binding.telegramChatId).slice(-4)} resolved to usr_mohsin_owner (canonical thread).`);
     // Owner verified! Check for explicit commands
     if (text.startsWith('/')) {
       await this.handleOwnerCommand(chatId, text);

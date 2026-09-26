@@ -55,6 +55,15 @@ import { isGuestActivationRequested, isGuestDeactivationRequested } from './lib/
 import { HoorviaLanding } from './components/HoorviaLanding';
 import { HoorviaDashboard } from './components/HoorviaDashboard';
 import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
+import { DesktopShell } from './components/desktop/DesktopShell';
+import {
+  getOwnerToken,
+  getOwnerAuthHeaders,
+  ensureOwnerSession,
+  storeOwnerSession,
+  clearOwnerSession,
+  getStoredOwnerUser,
+} from './lib/ownerAuth';
 
 export default function App() {
   // Public Multi-User Companion Platform State
@@ -72,7 +81,8 @@ export default function App() {
     return 'hoorvia';
   });
   const [hoorviaToken, setHoorviaToken] = useState<string | null>(() => {
-    return localStorage.getItem('hoorvia_user_token');
+    // Never treat a stale legacy value (e.g. a user id) as a session token.
+    return getOwnerToken();
   });
   const [hoorviaUser, setHoorviaUser] = useState<any | null>(() => {
     try {
@@ -214,6 +224,13 @@ export default function App() {
   // Refs for Audio & WebSocket
   const audioManagerRef = useRef<GeminiLiveAudioManager | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const activeConnectionIdRef = useRef<number>(0);
+  const reconnectTimeoutRef = useRef<any>(null);
+  const isComponentMountedRef = useRef<boolean>(true);
+  // Per-generation Live WS auth-failure flag + bounded session-repair attempts.
+  // Repair reconnects must never loop: max 2 repairs per close chain.
+  const liveAuthFailedRef = useRef<Record<number, boolean>>({});
+  const liveRepairAttemptsRef = useRef<number>(0);
   const videoFrameSamplerRef = useRef<number | null>(null);
   const videoFrameInFlightRef = useRef(false);
   const isVideoCallActiveRef = useRef(false);
@@ -228,7 +245,302 @@ export default function App() {
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
 
-  // 1. Initial Health Check, Server Status & Memory Sync across App Reloads
+  // Canonical owner auth headers - single source of truth (see lib/ownerAuth).
+  const getAuthHeaders = (): Record<string, string> => {
+    return getOwnerAuthHeaders();
+  };
+
+  // Component unmount cleanup
+  useEffect(() => {
+    isComponentMountedRef.current = true;
+    return () => {
+      isComponentMountedRef.current = false;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close(1000, 'App unmounted');
+        wsRef.current = null;
+      }
+    };
+  }, []);
+
+  // Initialize Gemini Live WebSocket with Monotonic Connection Isolation
+  const connectLiveSession = useCallback(() => {
+    if (platformMode === 'hoorvia') return;
+    if (!isComponentMountedRef.current) return;
+
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    const currentConnId = ++activeConnectionIdRef.current;
+    const connectionLabel = `LIVE_WS #${currentConnId}`;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // CURRENT valid session token is read fresh on every (re)connect so a
+    // repaired session is always used and stale values are never sent.
+    const ownerToken = getOwnerToken() || '';
+    const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${settings.voiceName}&ownerToken=${encodeURIComponent(ownerToken)}&connectionId=${encodeURIComponent(connectionLabel)}${isGuestMode ? '&guestMode=true' : ''}`;
+
+    console.log(`[${connectionLabel}] [CONNECT_INIT] Starting WebSocket connection`);
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (activeConnectionIdRef.current !== currentConnId) {
+          console.log(`[${connectionLabel}] [STALE_OPEN_IGNORED] Active is #${activeConnectionIdRef.current}`);
+          ws.close(1000, 'Superseded by newer connection');
+          return;
+        }
+        console.log(`[${connectionLabel}] [OPEN] Connected to Maryam Live WebSocket`);
+        setIsConnected(true);
+        liveRepairAttemptsRef.current = 0;
+        // Measure initial input latency
+        ws.send(JSON.stringify({ type: 'ping', connectionId: connectionLabel, clientTime: performance.now() }));
+        ws.send(JSON.stringify({ type: 'conversation_modality', connectionId: connectionLabel, modality: isVideoCallActiveRef.current ? 'video' : 'voice' }));
+      };
+
+      ws.onmessage = async (event) => {
+        if (activeConnectionIdRef.current !== currentConnId) {
+          return;
+        }
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'ready') {
+            console.log(`[${connectionLabel}] [READY] Gemini Live session ready with voice=${data.voice}`);
+          } else if (data.type === 'conversation_transcript' && (data.role === 'user' || data.role === 'maryam') && data.text) {
+            setMessages((previous) => {
+              const exists = previous.some((item) => item.sender === (data.role === 'user' ? 'user' : 'maryam') && item.text === data.text && Math.abs(item.timestamp - (data.timestamp || Date.now())) < 20000);
+              if (exists) return previous;
+              const next = [...previous, { id: `live-${data.timestamp || Date.now()}-${data.role}`, sender: data.role === 'user' ? 'user' : 'maryam', text: data.text, timestamp: data.timestamp || Date.now() } as ChatMessage];
+              saveRecentConversation(next);
+              return next;
+            });
+          } else if (data.type === 'pong' && typeof data.clientTime === 'number') {
+            const rtt = performance.now() - data.clientTime;
+            const latency = Math.max(1, Math.round(rtt / 2));
+            setDiagnostics((prev) => ({
+              ...prev,
+              speechInputLatencyMs: latency,
+              lastUpdated: Date.now(),
+            }));
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeConnectionIdRef.current === currentConnId) {
+              wsRef.current.send(JSON.stringify({ type: 'timing_report', connectionId: connectionLabel, speechInputLatencyMs: latency }));
+            }
+          } else if (data.type === 'timing' && data.metric === 'geminiResponseStartLatency' && typeof data.valueMs === 'number') {
+            setDiagnostics((prev) => ({
+              ...prev,
+              geminiResponseStartLatencyMs: Math.round(data.valueMs),
+              lastUpdated: Date.now(),
+            }));
+          } else if (data.type === 'audio' && data.audio) {
+            console.log(`[${connectionLabel}] [BROWSER_AUDIO_RECEIVED] bytes=${data.audio.length}`);
+            // Live audio chunk received from Gemini Live
+            if (audioManagerRef.current) {
+              await audioManagerRef.current.playChunk(data.audio, data.mimeType);
+            }
+          } else if (data.type === 'interrupted') {
+            console.log(`[${connectionLabel}] [BARGE_IN] Gemini Live detected user interruption`);
+            if (audioManagerRef.current) {
+              audioManagerRef.current.bargeIn();
+            }
+          } else if (data.type === 'turnComplete') {
+            setVoiceState(audioManagerRef.current?.getIsCapturing() ? 'Listening' : 'Idle');
+          } else if (data.type === 'execute_local_tool') {
+            console.log(`[${connectionLabel}] [Gemini Live Tool Dispatch to Local Runner]`, data.tool, data.params);
+            const token = localStorage.getItem('maryam_runner_token') || runnerToken || '';
+            (async () => {
+              // 1. Try direct localhost call
+              try {
+                const toolRes = await fetch('http://127.0.0.1:48123/api/tool', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                    ...(token ? { 'x-runner-token': token } : {}),
+                  },
+                  body: JSON.stringify({
+                    tool: data.tool,
+                    params: data.params || {},
+                  }),
+                });
+
+                if (toolRes.ok) {
+                  const toolJson = await toolRes.json();
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeConnectionIdRef.current === currentConnId) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'local_tool_response',
+                      connectionId: connectionLabel,
+                      callId: data.callId,
+                      result: toolJson,
+                    }));
+                  }
+                  if (data.tool === 'omniroute.status' && toolJson?.result) {
+                    setRunnerState((prev) => ({
+                      ...prev,
+                      runnerStatus: 'ONLINE',
+                      omnirouteStatus: toolJson.result.available ? 'Ready' : 'Unavailable',
+                      omniroutePath: toolJson.result.path,
+                      omnirouteVersion: toolJson.result.version,
+                      lastChecked: Date.now(),
+                    }));
+                  }
+                  return;
+                }
+              } catch (err: any) {
+                console.log('Direct localhost call in browser note:', err?.message);
+              }
+
+              // 2. Fallback: Ask Maryam Server Dispatcher (in case runner is on relay)
+              try {
+                const serverExecRes = await fetch('/api/runner/execute', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    tool: data.tool,
+                    params: data.params || {},
+                  }),
+                });
+                const serverExecJson = await serverExecRes.json();
+                if (serverExecJson?.success && serverExecJson.result) {
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeConnectionIdRef.current === currentConnId) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'local_tool_response',
+                      connectionId: connectionLabel,
+                      callId: data.callId,
+                      result: serverExecJson.result,
+                    }));
+                  }
+                  if (data.tool === 'omniroute.status' && serverExecJson.result?.available) {
+                    setRunnerState((prev) => ({
+                      ...prev,
+                      runnerStatus: 'ONLINE',
+                      omnirouteStatus: 'Ready',
+                      omniroutePath: serverExecJson.result.path,
+                      omnirouteVersion: serverExecJson.result.version,
+                      lastChecked: Date.now(),
+                    }));
+                  }
+                  return;
+                }
+              } catch (_) {}
+
+              // 3. If neither worked, report real status
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeConnectionIdRef.current === currentConnId) {
+                wsRef.current.send(JSON.stringify({
+                  type: 'local_tool_response',
+                  connectionId: connectionLabel,
+                  callId: data.callId,
+                  result: {
+                    success: false,
+                    error: 'Could not reach local runner directly (browser mixed-content blocked) or via relay tunnel.',
+                    runnerStatus: 'Local Runner Offline',
+                    omnirouteStatus: 'OmniRoute Unavailable',
+                  },
+                }));
+              }
+            })();
+          } else if (data.type === 'error') {
+            console.warn(`[${connectionLabel}] [LIVE_WS_ERROR_MSG]`, data.message);
+            const errCode = String(data.code || '');
+            if (
+              errCode === 'OWNER_AUTH_REQUIRED' ||
+              errCode === 'UNAUTHORIZED' ||
+              errCode === 'SESSION_EXPIRED' ||
+              /owner authorization|session.*expired|unauthorized/i.test(String(data.message || ''))
+            ) {
+              liveAuthFailedRef.current[currentConnId] = true;
+            }
+          }
+        } catch (e) {
+          console.error(`[${connectionLabel}] Error handling WebSocket message:`, e);
+        }
+      };
+
+      ws.onclose = (e) => {
+        if (activeConnectionIdRef.current !== currentConnId) {
+          console.log(`[${connectionLabel}] [IGNORED_STALE_CLOSE] code=${e.code} reason="${e.reason}" (active connection is #${activeConnectionIdRef.current})`);
+          return;
+        }
+        console.log(`[${connectionLabel}] [CLIENT_WS_ONCLOSE] code=${e.code} reason="${e.reason}" wasClean=${e.wasClean}`);
+        setIsConnected(false);
+        wsRef.current = null;
+
+        // Automatically reconnect with exponential backoff if component is still active
+        if (isComponentMountedRef.current) {
+          const authFailed =
+            !!liveAuthFailedRef.current[currentConnId] || e.code === 1008 || e.code === 4401;
+          delete liveAuthFailedRef.current[currentConnId];
+
+          if (authFailed) {
+            // Owner session is missing/expired/invalid: repair via the existing
+            // legitimate re-auth flow, then reconnect ONCE with the fresh token.
+            // Bounded to 2 repairs so a persistent server-side refusal never
+            // becomes an infinite reconnect loop.
+            if (liveRepairAttemptsRef.current < 2) {
+              liveRepairAttemptsRef.current += 1;
+              console.log(`[${connectionLabel}] [AUTH_REPAIR] Refreshing owner session (attempt ${liveRepairAttemptsRef.current}/2)...`);
+              reconnectTimeoutRef.current = setTimeout(async () => {
+                if (!isComponentMountedRef.current) return;
+                try {
+                  const repaired = await ensureOwnerSession(true);
+                  if (repaired) {
+                    setHoorviaToken(repaired.token);
+                    if (repaired.user) {
+                      setHoorviaUser(repaired.user);
+                      if (repaired.user.role === 'owner' && repaired.user.id === 'usr_mohsin_owner') {
+                        setPlatformMode('mohsin_maryam');
+                        try { localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam'); } catch {}
+                      }
+                    }
+                    if (repaired.companion) setHoorviaCompanion(repaired.companion);
+                    console.log(`[${connectionLabel}] [AUTH_REPAIR_OK] Reconnecting with fresh session`);
+                    if (isComponentMountedRef.current && (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED)) {
+                      connectLiveSession();
+                    }
+                  } else {
+                    console.warn(`[${connectionLabel}] [AUTH_REPAIR_FAILED] Owner re-auth did not return a session`);
+                  }
+                } catch (repairErr) {
+                  console.warn(`[${connectionLabel}] [AUTH_REPAIR_ERROR]`, repairErr);
+                }
+              }, 1500);
+            } else {
+              console.warn(`[${connectionLabel}] [AUTH_REPAIR_EXHAUSTED] Not retrying; surface genuine state`);
+            }
+          } else if (e.code !== 1000) {
+            console.log(`[${connectionLabel}] [RECONNECT_SCHEDULED] Scheduling reconnect in 2000ms...`);
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (isComponentMountedRef.current && (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED)) {
+                connectLiveSession();
+              }
+            }, 2000);
+          }
+        }
+      };
+
+      ws.onerror = (err) => {
+        if (activeConnectionIdRef.current !== currentConnId) {
+          return;
+        }
+        console.warn(`[${connectionLabel}] [CLIENT_WS_ERROR]`, err);
+      };
+    } catch (e) {
+      console.warn(`[${connectionLabel}] Failed to open WebSocket:`, e);
+    }
+  }, [platformMode, settings.voiceName, isGuestMode]);
+
+  // 1. Initial Health Check, Owner Auth, Server Status & Memory Sync across App Reloads
   useEffect(() => {
     fetch('/api/health')
       .then((res) => res.json())
@@ -238,47 +550,75 @@ export default function App() {
           companion: data.companion,
           modelLive: data.modelLive,
         });
-        setIsConnected(true);
       })
       .catch((err) => {
         console.warn('Server health check error:', err);
         setIsConnected(false);
       });
 
-    // Ensure memory survives app reloads / restarts by syncing with server disk storage
-    fetch('/api/memory')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.memory && typeof data.memory === 'object') {
-          setMemory((prev) => {
-            const merged = mergeMemoryBanks(prev, data.memory);
-            saveMemoryBank(merged);
-            return merged;
-          });
+    const initOwnerAuthAndSync = async () => {
+      // Canonical owner session bootstrap: validate any stored token, purge
+      // stale/invalid legacy values, and repair via the existing legitimate
+      // owner re-auth flow. A page refresh must never break authorization.
+      let token: string | null = null;
+      try {
+        const session = await ensureOwnerSession(false);
+        if (session) {
+          token = session.token;
+          setHoorviaToken(session.token);
+          if (session.user) {
+            setHoorviaUser(session.user);
+            if (session.user.role === 'owner' && session.user.id === 'usr_mohsin_owner') {
+              setPlatformMode('mohsin_maryam');
+              try { localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam'); } catch {}
+            }
+          }
+          if (session.companion) setHoorviaCompanion(session.companion);
+        } else {
+          const cachedUser = getStoredOwnerUser();
+          if (cachedUser) setHoorviaUser(cachedUser);
         }
-      })
-      .catch((err) => console.warn('Memory disk sync notice:', err));
+      } catch (e) {
+        console.warn('Owner auth bootstrap notice:', e);
+      }
 
-    // Server is authoritative for owner conversational continuity; localStorage is display cache only.
-    fetch('/api/owner/conversation', {
-      headers: (() => {
-        const token = localStorage.getItem('hoorvia_user_token');
-        return token ? { Authorization: `Bearer ${token}` } : undefined;
-      })(),
-    })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (Array.isArray(data?.turns) && data.turns.length) {
-          const hydrated = data.turns.map((turn: any) => ({
-            id: turn.id, sender: turn.role === 'user' ? 'user' : 'maryam', text: turn.content,
-            timestamp: turn.timestamp, emotion: undefined,
-          }));
-          setMessages(hydrated);
-          saveRecentConversation(hydrated);
-        }
-      })
-      .catch((err) => console.warn('Conversation continuity sync notice:', err));
-  }, []);
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}`, 'x-hoorvia-token': token } : {};
+
+      // Ensure memory survives app reloads / restarts by syncing with server disk storage
+      fetch('/api/memory', { headers })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.memory && typeof data.memory === 'object') {
+            setMemory((prev) => {
+              const merged = mergeMemoryBanks(prev, data.memory);
+              saveMemoryBank(merged);
+              return merged;
+            });
+          }
+        })
+        .catch((err) => console.warn('Memory disk sync notice:', err));
+
+      // Server is authoritative for owner conversational continuity; localStorage is display cache only.
+      fetch('/api/owner/conversation', { headers })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (Array.isArray(data?.turns) && data.turns.length) {
+            const hydrated = data.turns.map((turn: any) => ({
+              id: turn.id, sender: turn.role === 'user' ? 'user' : 'maryam', text: turn.content,
+              timestamp: turn.timestamp, emotion: undefined,
+            }));
+            setMessages(hydrated);
+            saveRecentConversation(hydrated);
+          }
+        })
+        .catch((err) => console.warn('Conversation continuity sync notice:', err));
+
+      // Establish Live WebSocket session
+      connectLiveSession();
+    };
+
+    initOwnerAuthAndSync();
+  }, [connectLiveSession]);
 
   // Save memory whenever updated manually (Authoritative user edit)
   const handleUpdateMemory = (newMemory: MemoryBank) => {
@@ -487,185 +827,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [platformMode]);
 
-  // 2. Initialize Gemini Live WebSocket & Audio Manager
-  const connectLiveSession = useCallback(() => {
-    if (platformMode === 'hoorvia') return;
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ownerToken = localStorage.getItem('hoorvia_user_token') || '';
-    const wsUrl = `${protocol}//${window.location.host}/api/live-ws?voice=${settings.voiceName}&ownerToken=${encodeURIComponent(ownerToken)}${isGuestMode ? '&guestMode=true' : ''}`;
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log('Connected to Maryam Live WebSocket');
-        setIsConnected(true);
-        // Measure initial input latency
-        ws.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }));
-        ws.send(JSON.stringify({ type: 'conversation_modality', modality: isVideoCallActiveRef.current ? 'video' : 'voice' }));
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === 'conversation_transcript' && (data.role === 'user' || data.role === 'maryam') && data.text) {
-            setMessages((previous) => {
-              const exists = previous.some((item) => item.sender === (data.role === 'user' ? 'user' : 'maryam') && item.text === data.text && Math.abs(item.timestamp - (data.timestamp || Date.now())) < 20000);
-              if (exists) return previous;
-              const next = [...previous, { id: `live-${data.timestamp || Date.now()}-${data.role}`, sender: data.role === 'user' ? 'user' : 'maryam', text: data.text, timestamp: data.timestamp || Date.now() } as ChatMessage];
-              saveRecentConversation(next);
-              return next;
-            });
-          } else if (data.type === 'pong' && typeof data.clientTime === 'number') {
-            const rtt = performance.now() - data.clientTime;
-            const latency = Math.max(1, Math.round(rtt / 2));
-            setDiagnostics((prev) => ({
-              ...prev,
-              speechInputLatencyMs: latency,
-              lastUpdated: Date.now(),
-            }));
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: 'timing_report', speechInputLatencyMs: latency }));
-            }
-          } else if (data.type === 'timing' && data.metric === 'geminiResponseStartLatency' && typeof data.valueMs === 'number') {
-            setDiagnostics((prev) => ({
-              ...prev,
-              geminiResponseStartLatencyMs: Math.round(data.valueMs),
-              lastUpdated: Date.now(),
-            }));
-          } else if (data.type === 'audio' && data.audio) {
-            console.log(`[BROWSER_AUDIO_RECEIVED] bytes=${data.audio.length}`);
-            // Live audio chunk received from Gemini Live
-            if (audioManagerRef.current) {
-              await audioManagerRef.current.playChunk(data.audio, data.mimeType);
-            }
-          } else if (data.type === 'interrupted') {
-            console.log('Gemini Live detected user interruption');
-            if (audioManagerRef.current) {
-              audioManagerRef.current.bargeIn();
-            }
-          } else if (data.type === 'turnComplete') {
-            setVoiceState(audioManagerRef.current?.getIsCapturing() ? 'Listening' : 'Idle');
-          } else if (data.type === 'execute_local_tool') {
-            console.log('[Gemini Live Tool Dispatch to Local Runner]', data.tool, data.params);
-            const token = localStorage.getItem('maryam_runner_token') || runnerToken || '';
-            (async () => {
-              // 1. Try direct localhost call
-              try {
-                const toolRes = await fetch('http://127.0.0.1:48123/api/tool', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-                    ...(token ? { 'x-runner-token': token } : {}),
-                  },
-                  body: JSON.stringify({
-                    tool: data.tool,
-                    params: data.params || {},
-                  }),
-                });
-
-                if (toolRes.ok) {
-                  const toolJson = await toolRes.json();
-                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(JSON.stringify({
-                      type: 'local_tool_response',
-                      callId: data.callId,
-                      result: toolJson,
-                    }));
-                  }
-                  if (data.tool === 'omniroute.status' && toolJson?.result) {
-                    setRunnerState((prev) => ({
-                      ...prev,
-                      runnerStatus: 'ONLINE',
-                      omnirouteStatus: toolJson.result.available ? 'Ready' : 'Unavailable',
-                      omniroutePath: toolJson.result.path,
-                      omnirouteVersion: toolJson.result.version,
-                      lastChecked: Date.now(),
-                    }));
-                  }
-                  return;
-                }
-              } catch (err: any) {
-                console.log('Direct localhost call in browser note:', err?.message);
-              }
-
-              // 2. Fallback: Ask Maryam Server Dispatcher (in case runner is on relay)
-              try {
-                const serverExecRes = await fetch('/api/runner/execute', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    tool: data.tool,
-                    params: data.params || {},
-                  }),
-                });
-                const serverExecJson = await serverExecRes.json();
-                if (serverExecJson?.success && serverExecJson.result) {
-                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(JSON.stringify({
-                      type: 'local_tool_response',
-                      callId: data.callId,
-                      result: serverExecJson.result,
-                    }));
-                  }
-                  if (data.tool === 'omniroute.status' && serverExecJson.result?.available) {
-                    setRunnerState((prev) => ({
-                      ...prev,
-                      runnerStatus: 'ONLINE',
-                      omnirouteStatus: 'Ready',
-                      omniroutePath: serverExecJson.result.path,
-                      omnirouteVersion: serverExecJson.result.version,
-                      lastChecked: Date.now(),
-                    }));
-                  }
-                  return;
-                }
-              } catch (_) {}
-
-              // 3. If neither worked, report real status
-              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({
-                  type: 'local_tool_response',
-                  callId: data.callId,
-                  result: {
-                    success: false,
-                    error: 'Could not reach local runner directly (browser mixed-content blocked) or via relay tunnel.',
-                    runnerStatus: 'Local Runner Offline',
-                    omnirouteStatus: 'OmniRoute Unavailable',
-                  },
-                }));
-              }
-            })();
-          } else if (data.type === 'error') {
-            console.warn('Live WS message error:', data.message);
-          }
-        } catch (e) {
-          console.error('Error handling WebSocket message:', e);
-        }
-      };
-
-      ws.onclose = (e) => {
-        console.log(`[CLIENT_CLOSE_CALLED] source=App.tsx.ws.onclose code=${e.code} reason=${e.reason}`);
-        setIsConnected(false);
-        wsRef.current = null;
-      };
-
-      ws.onerror = (err) => {
-        console.warn('Maryam Live WebSocket error:', err);
-      };
-    } catch (e) {
-      console.warn('Failed to open WebSocket:', e);
-    }
-  }, [platformMode, settings.voiceName, isGuestMode]);
-
-  // Audio Manager Setup
+  // Audio Manager Setup - Lifecycle decoupled from WebSocket connection
   useEffect(() => {
     if (platformMode === 'hoorvia') {
       return;
@@ -675,8 +837,8 @@ export default function App() {
       onAudioData: (base64Pcm: string, metadata?: { rms: number; isSpeaking: boolean; captureTimestamp: number }) => {
         // Send microphone chunk to server WebSocket on the isolated hot path
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ 
-            type: 'audio', 
+          wsRef.current.send(JSON.stringify({
+            type: 'audio',
             audio: base64Pcm,
             isSpeaking: metadata?.isSpeaking,
           }));
@@ -705,11 +867,9 @@ export default function App() {
     manager.setGuestMode(isGuestMode);
 
     return () => {
-      console.log('[CLIENT_CLOSE_CALLED] source=App.tsx.audioManager_useEffect_cleanup');
+      console.log('[AUDIO_MANAGER_CLEANUP] Destroying audio nodes without killing live WebSocket');
       manager.destroy();
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      // wsRef is explicitly NOT closed here to prevent effect re-runs from resetting Live WS
     };
   }, [platformMode, settings.bargeInEnabled, isGuestMode]);
 
@@ -819,7 +979,7 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(localStorage.getItem('hoorvia_user_token') ? { Authorization: `Bearer ${localStorage.getItem('hoorvia_user_token')}` } : {}),
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           text: msg.text,
@@ -1050,7 +1210,10 @@ export default function App() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({
           message: text,
           imageBase64: capturedImageBase64,
@@ -1071,7 +1234,7 @@ export default function App() {
         setCameraStream(null);
       }
       setVisionImage(null);
-      const replyText = data.reply || '';
+      const replyText = data.text || data.reply || '';
 
       const postVisionDiag: VisionDiagnostics = {
         ...initialVisionDiag,
@@ -1214,7 +1377,10 @@ export default function App() {
     try {
       const res = await fetch('/api/tts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({
           text: ackText,
           voiceName: settings.voiceName,
@@ -1323,18 +1489,18 @@ export default function App() {
     setHoorviaToken(data.token);
     setHoorviaUser(data.user);
     setHoorviaCompanion(data.companion);
-    localStorage.setItem('hoorvia_user_token', data.token);
-    localStorage.setItem('hoorvia_user_data', JSON.stringify(data.user));
-    localStorage.setItem('hoorvia_companion_data', JSON.stringify(data.companion));
+    storeOwnerSession(data);
   };
 
   const handleHoorviaLogout = () => {
     setHoorviaToken(null);
     setHoorviaUser(null);
     setHoorviaCompanion(null);
-    localStorage.removeItem('hoorvia_user_token');
-    localStorage.removeItem('hoorvia_user_data');
-    localStorage.removeItem('hoorvia_companion_data');
+    clearOwnerSession();
+    try {
+      localStorage.removeItem('hoorvia_companion_data');
+      localStorage.removeItem('hoorvia_platform_mode');
+    } catch {}
   };
 
   // Verify securely authenticated owner identity
@@ -1392,225 +1558,154 @@ export default function App() {
     );
   }
 
-  const currentEmotionMeta = EMOTION_MAP[emotion] || EMOTION_MAP.Normal;
+  const renderActiveTabContent = () => {
+    switch (activeTab) {
+      case 'conversations':
+        return (
+          <div className="flex flex-col h-full w-full bg-[#060207] rounded-2xl overflow-hidden border border-rose-950/40 shadow-inner">
+            {/* Context Status Bar */}
+            <div className="px-4 py-2 bg-rose-950/20 border-b border-rose-900/20 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-xs font-semibold text-rose-200 uppercase tracking-wider">
+                  Permanent Owner Conversation
+                </span>
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  (3-Layer Memory Bank Active)
+                </span>
+              </div>
+              <div className="text-[11px] text-zinc-400">
+                {messages.length} turns recorded
+              </div>
+            </div>
+
+            {/* Conversation Stream */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <ConversationView
+                messages={messages}
+                isThinking={isThinking}
+                onPlayMessageAudio={handlePlayMessageAudio}
+                playingMessageId={playingMessageId}
+                onSelectSuggestion={(sug) => handleSendMessage(sug)}
+              />
+            </div>
+
+            {/* Full-width Composer Bar */}
+            <div className="p-3 bg-[#0a0409] border-t border-rose-900/30 shrink-0">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const target = e.currentTarget.elements.namedItem('chatInput') as HTMLInputElement;
+                  if (target && target.value.trim() && !isThinking) {
+                    handleSendMessage(target.value.trim());
+                    target.value = '';
+                  }
+                }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  name="chatInput"
+                  type="text"
+                  placeholder="Maryam se baat karein... (Urdu, Hindi, English)"
+                  disabled={isThinking}
+                  className="flex-1 bg-white/5 border border-rose-900/30 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-rose-500/60 transition-all disabled:opacity-50"
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  disabled={isThinking}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-purple-600 hover:from-rose-500 hover:to-purple-500 text-white font-medium text-xs tracking-wider transition-all disabled:opacity-40 shadow-lg shadow-rose-950/50 shrink-0"
+                >
+                  SEND
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      case 'reminders':
+        return <RemindersPanel />;
+      case 'routines':
+        return <RoutinesPanel />;
+      case 'create_task':
+        return (
+          <CreateTaskView
+            onTaskCreated={() => setActiveTab('scheduled_tasks')}
+            onNavigateToScheduled={() => setActiveTab('scheduled_tasks')}
+            authToken={hoorviaToken || undefined}
+          />
+        );
+      case 'scheduled_tasks':
+        return (
+          <ScheduledTasksView
+            onNavigateToCreate={() => setActiveTab('create_task')}
+            authToken={hoorviaToken || undefined}
+          />
+        );
+      case 'connectivity':
+        return (
+          <ConnectivityView
+            runnerState={runnerState}
+            authToken={hoorviaToken || undefined}
+          />
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="h-screen h-[100dvh] max-h-screen w-screen max-w-full bg-[#06040a] text-zinc-100 flex flex-col font-sans selection:bg-rose-500/30 overflow-hidden relative min-h-0">
-      {/* Dynamic Ambient Aura Background matching Maryam's Emotion */}
-      <div
-        className="fixed inset-0 pointer-events-none transition-colors duration-1000 opacity-20 blur-[140px]"
-        style={{
-          background: `radial-gradient(ellipse at 35% 30%, ${currentEmotionMeta.orbPrimary} 0%, ${currentEmotionMeta.orbSecondary} 45%, transparent 85%)`,
-        }}
-      />
-
-      {/* Navigation Sidebar Drawer */}
-      <NavigationSidebar
-        isOpen={isMenuOpen}
-        onClose={() => setIsMenuOpen(false)}
+      {/* Desktop Immersive Companion Shell */}
+      <DesktopShell
         activeTab={activeTab}
         onSelectTab={(tab) => {
           if (tab === 'social') {
             setIsSocialOpen(true);
-            setIsMenuOpen(false);
           } else {
-            setActiveTab(tab);
+            setActiveTab(tab as NavTab);
           }
         }}
-        onOpenMemory={() => {
-          setIsMemoryOpen(true);
-          setIsMenuOpen(false);
-        }}
-        onOpenSettings={() => {
-          setIsSettingsOpen(true);
-          setIsMenuOpen(false);
-        }}
-        onOpenToolRunner={() => {
-          setIsToolRunnerOpen(true);
-          setIsMenuOpen(false);
-        }}
-        onOpenDiagnostics={() => {
-          setIsDiagnosticsOpen(true);
-          setIsMenuOpen(false);
-        }}
-        onOpenSocial={() => {
-          setIsSocialOpen(true);
-          setIsMenuOpen(false);
-        }}
-        onOpenOwnerAdmin={() => {
-          setShowOwnerAdmin(true);
-          setIsMenuOpen(false);
-        }}
-        isConnected={isConnected}
-        runnerConnected={isRunnerOnline(runnerState.runnerStatus)}
-        omniRouteAvailable={isOmniRouteReady(runnerState.omnirouteStatus)}
-      />
-
-      {/* Top Header */}
-      <Header
-        emotion={emotion}
-        isConnected={isConnected}
-        onOpenMenu={() => setIsMenuOpen(true)}
         onOpenMemory={() => setIsMemoryOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenToolRunner={() => setIsToolRunnerOpen(true)}
-        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
         onOpenSocial={() => setIsSocialOpen(true)}
+        onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
+        messages={messages}
+        isThinking={isThinking}
+        voiceState={voiceState}
+        audioLevel={audioLevel}
+        emotion={emotion}
+        isConnected={isConnected}
+        isMuted={isMuted}
+        playingMessageId={playingMessageId}
+        isGuestMode={isGuestMode}
+        onEndGuestMode={() => setIsGuestMode(false)}
+        onPlayMessageAudio={handlePlayMessageAudio}
+        onSendMessage={handleSendMessage}
+        onToggleMic={handleToggleMic}
+        onToggleMute={handleToggleMute}
+        onBargeIn={handleBargeIn}
+        isCameraActive={isCameraActive}
+        onToggleCamera={handleToggleCamera}
+        onSelectImage={setVisionImageFromFile}
+        isVideoCallActive={isVideoCallActive}
+        onToggleVideoCall={() => (isVideoCallActive ? stopVideoCall() : void startVideoCall())}
+        onSnapPhoto={handleCaptureVision}
+        onSwitchCamera={handleSwitchCamera}
+        wakeWordActive={wakeWordActive}
+        wakeWordStatus={wakeWordStatus}
+        enableWakeWord={settings.enableWakeWord}
+        wakePhrase={settings.wakePhrase}
+        onTriggerWakeWord={() => handleWakePhraseActivation(settings.wakePhrase)}
+        runnerConnected={isRunnerOnline(runnerState.runnerStatus)}
+        platformMode="owner"
         onSwitchPlatformMode={() => {
           setPlatformMode('hoorvia');
           localStorage.setItem('hoorvia_platform_mode', 'hoorvia');
         }}
-        diagnostics={diagnostics}
-        voiceName={settings.voiceName}
-        runnerState={runnerState}
+        isOwner={true}
+        activeViewContent={renderActiveTabContent()}
       />
-
-      {/* Main Responsive 3-Panel Stage */}
-      <div className="flex-1 min-h-0 w-full max-w-[1800px] mx-auto flex flex-col md:flex-row overflow-hidden relative z-10 h-[calc(100dvh-60px)]">
-        {/* Column 1: Slim Left Navigation Sidebar (Desktop) */}
-        <LeftDesktopSidebar
-          activeTab={activeTab}
-          onSelectTab={(tab) => {
-            if (tab === 'social') {
-              setIsSocialOpen(true);
-            } else {
-              setActiveTab(tab);
-            }
-          }}
-          onOpenMemory={() => setIsMemoryOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenToolRunner={() => setIsToolRunnerOpen(true)}
-          onOpenSocial={() => setIsSocialOpen(true)}
-          onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
-        />
-
-        {/* Center & Right Columns Container */}
-        <main className="flex-1 min-h-0 p-1 sm:p-3 md:p-4 flex flex-col xl:flex-row gap-2 xl:gap-4 overflow-y-auto h-full">
-          {/* Column 2: MARYAM CHARACTER PROMINENCE (Home Tab Only) */}
-          {activeTab === 'home' && (
-            <section className="flex-[1.85] min-h-[380px] xl:w-[66%] min-h-0 xl:h-full flex flex-col justify-center shrink-0">
-              <MaryamCharacter
-                voiceState={voiceState}
-                emotion={emotion}
-                audioLevel={audioLevel}
-                isConnected={isConnected}
-                onCharacterClick={handleToggleMic}
-                onSelectEmotion={(e) => setEmotion(e)}
-              />
-            </section>
-          )}
-
-          {/* Column 3: CONVERSATION PANEL / TAB CONTENT (Full width when not on Home) */}
-          <section className={`flex-1 min-h-[460px] xl:min-h-0 ${activeTab === 'home' ? 'xl:w-[34%] xl:h-full' : 'w-full h-full'} flex flex-col justify-between overflow-y-auto`}>
-            {/* Live Camera Preview Widget */}
-            {isCameraActive && (
-              <div className="px-4 py-2 shrink-0 border-b border-rose-900/20 bg-black/40 rounded-t-3xl">
-                <CameraPreview
-                  stream={cameraStream}
-                  isActive={isCameraActive}
-                  onToggleCamera={handleToggleCamera}
-                  onCaptureVision={handleCaptureVision}
-                  onSwitchCamera={handleSwitchCamera}
-                />
-              </div>
-            )}
-            {visionImage && (
-              <div className="mx-4 mt-2 flex items-center gap-3 rounded-xl border border-rose-500/40 bg-zinc-900 p-2 text-xs text-zinc-200">
-                <img src={visionImage.preview} alt="Selected for vision analysis" className="h-14 w-14 rounded object-cover" />
-                <span className="flex-1">Image ready for your next question. It is sent once, only when you press Send.</span>
-                <button type="button" onClick={() => setVisionImage(null)} className="rounded bg-zinc-800 px-2 py-1 text-zinc-300">Remove</button>
-              </div>
-            )}
-
-            {activeTab === 'home' && (
-              <HomeStatusPanel
-                latestMessage={messages[messages.length - 1] || null}
-                voiceState={voiceState}
-                emotion={emotion}
-                audioLevel={audioLevel}
-                isThinking={isThinking}
-                isMuted={isMuted}
-                onToggleMic={handleToggleMic}
-                onToggleMute={handleToggleMute}
-                onBargeIn={handleBargeIn}
-                onSendMessage={handleSendMessage}
-                onToggleCamera={handleToggleCamera}
-                isCameraActive={isCameraActive}
-                wakeWordActive={wakeWordActive}
-                wakeWordStatus={wakeWordStatus}
-                enableWakeWord={settings.enableWakeWord}
-                wakePhrase={settings.wakePhrase}
-                onTriggerWakeWord={() => handleWakePhraseActivation(settings.wakePhrase)}
-                onOpenMemory={() => setIsMemoryOpen(true)}
-                onOpenToolRunner={() => setIsToolRunnerOpen(true)}
-                onSelectTab={(tab) => {
-                  if (tab === 'social') setIsSocialOpen(true);
-                  else setActiveTab(tab as NavTab);
-                }}
-              />
-            )}
-
-            {activeTab === 'conversations' && (
-              <RightConversationPanel
-                messages={messages}
-                isThinking={isThinking}
-                voiceState={voiceState}
-                isMuted={isMuted}
-                audioLevel={audioLevel}
-                playingMessageId={playingMessageId}
-                isGuestMode={isGuestMode}
-                onEndGuestMode={() => setIsGuestMode(false)}
-                onPlayMessageAudio={handlePlayMessageAudio}
-                onSendMessage={handleSendMessage}
-                onToggleMic={handleToggleMic}
-                onToggleMute={handleToggleMute}
-                onBargeIn={handleBargeIn}
-                onToggleCamera={handleToggleCamera}
-                onSelectImage={setVisionImageFromFile}
-                isVideoCallActive={isVideoCallActive}
-                onToggleVideoCall={() => isVideoCallActive ? stopVideoCall() : void startVideoCall()}
-                isCameraActive={isCameraActive}
-                wakeWordActive={wakeWordActive}
-                wakeWordStatus={wakeWordStatus}
-                enableWakeWord={settings.enableWakeWord}
-                wakePhrase={settings.wakePhrase}
-                onTriggerWakeWord={() => handleWakePhraseActivation(settings.wakePhrase)}
-                onOpenMemory={() => setIsMemoryOpen(true)}
-                onOpenToolRunner={() => setIsToolRunnerOpen(true)}
-                onSelectTab={(tab) => {
-                  if (tab === 'social') setIsSocialOpen(true);
-                  else setActiveTab(tab as NavTab);
-                }}
-              />
-            )}
-
-            {activeTab === 'reminders' && <RemindersPanel />}
-            {activeTab === 'routines' && <RoutinesPanel />}
-
-            {activeTab === 'create_task' && (
-              <CreateTaskView
-                onTaskCreated={() => setActiveTab('scheduled_tasks')}
-                onNavigateToScheduled={() => setActiveTab('scheduled_tasks')}
-                authToken={hoorviaToken || undefined}
-              />
-            )}
-
-            {activeTab === 'scheduled_tasks' && (
-              <ScheduledTasksView
-                onNavigateToCreate={() => setActiveTab('create_task')}
-                authToken={hoorviaToken || undefined}
-              />
-            )}
-
-            {activeTab === 'connectivity' && (
-              <ConnectivityView
-                runnerState={runnerState}
-                authToken={hoorviaToken || undefined}
-              />
-            )}
-          </section>
-        </main>
-      </div>
 
       {/* Modals */}
       <TimingDiagnosticsModal

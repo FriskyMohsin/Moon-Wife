@@ -1,6 +1,7 @@
 import { maryamTelegram } from './maryamTelegram';
 import { maryamWhatsApp } from './maryamWhatsApp';
 import { IntegrationHealthInfo } from '../types/taskManagement';
+import { resolveDataPath } from './runtimePaths';
 import fs from 'fs';
 import path from 'path';
 
@@ -121,7 +122,7 @@ export function getSystemConnectivityHealth(currentRunnerState?: {
   // 4. Core Memory
   let totalMemories = 0;
   try {
-    const memPath = path.join(process.cwd(), 'data', 'hoorvia_platform', 'memories.json');
+    const memPath = resolveDataPath('hoorvia_platform', 'memories.json');
     if (fs.existsSync(memPath)) {
       const memData = JSON.parse(fs.readFileSync(memPath, 'utf-8'));
       if (Array.isArray(memData)) {

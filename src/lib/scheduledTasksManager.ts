@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { resolveDataPath } from './runtimePaths';
+import { readJsonSafeSync, writeJsonAtomicSync } from './dataPersistence';
 import {
   ScheduledTask,
   TaskRunHistory,
@@ -8,36 +10,22 @@ import {
   TaskType,
   TaskScheduleConfig,
 } from '../types/taskManagement';
+import type { TaskToolExecutor } from './taskExecutor';
 
-const DATA_DIR = path.join(process.cwd(), 'data', 'hoorvia_platform');
-const TASKS_FILE = path.join(DATA_DIR, 'scheduled_tasks.json');
-const RUNS_FILE = path.join(DATA_DIR, 'task_runs.json');
-
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-}
+const TASKS_FILE = resolveDataPath('hoorvia_platform', 'scheduled_tasks.json');
+const RUNS_FILE = resolveDataPath('hoorvia_platform', 'task_runs.json');
 
 function loadJson<T>(filePath: string, fallback: T): T {
-  ensureDataDir();
-  try {
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, JSON.stringify(fallback, null, 2), 'utf-8');
-      return fallback;
-    }
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(data) as T;
-  } catch (err) {
-    console.error(`[TaskManager] Failed loading ${filePath}:`, err);
+  if (!fs.existsSync(filePath)) {
+    writeJsonAtomicSync(filePath, fallback);
     return fallback;
   }
+  return readJsonSafeSync<T>(filePath, fallback);
 }
 
 function saveJson<T>(filePath: string, data: T): void {
-  ensureDataDir();
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    writeJsonAtomicSync(filePath, data);
   } catch (err) {
     console.error(`[TaskManager] Failed saving ${filePath}:`, err);
   }
@@ -411,9 +399,17 @@ export function deleteScheduledTask(taskId: string): boolean {
 }
 
 /**
- * Executes a task immediately with real run tracking.
+ * Executes a task immediately through the REAL executor pipeline
+ * (Local Runner / computer-control tools), never metadata-only.
+ *
+ * State machine: QUEUED -> RUNNING -> COMPLETED | FAILED | NEEDS_APPROVAL.
+ * COMPLETED is set only when execution genuinely succeeded and verified.
  */
-export async function executeTaskNow(taskId: string): Promise<{ task: ScheduledTask; run: TaskRunHistory }> {
+export async function executeTaskNow(
+  taskId: string,
+  opts: { executor?: TaskToolExecutor; preApproved?: boolean } = {}
+): Promise<{ task: ScheduledTask; run: TaskRunHistory }> {
+  const { executeTaskInstructions, getTaskToolExecutor } = await import('./taskExecutor');
   const tasks = getAllTasks();
   const idx = tasks.findIndex((t) => t.task_id === taskId);
   if (idx === -1) {
@@ -425,7 +421,7 @@ export async function executeTaskNow(taskId: string): Promise<{ task: ScheduledT
   const startedAtIso = new Date(startTime).toISOString();
   const runId = `run_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
-  // 1. Mark task IN PROGRESS
+  // 1. Mark task RUNNING (QUEUED -> RUNNING transition)
   task.status = 'IN PROGRESS';
   task.progress = 'Running';
   task.updated_at = startedAtIso;
@@ -446,43 +442,55 @@ export async function executeTaskNow(taskId: string): Promise<{ task: ScheduledT
   runs.unshift(initialRun);
   saveJson(RUNS_FILE, runs);
 
-  // 2. Perform Real Execution Simulation
-  let executionSuccess = true;
-  let resultSummary = '';
-  let errorMessage: string | null = null;
-
+  // 2. REAL execution through the executor pipeline (never simulated)
+  const executor = opts.executor || getTaskToolExecutor();
+  let real: { success: boolean; needsApproval?: any; result_summary: string; error?: string | null; output?: any };
   try {
-    // Generate intelligent summary for Maryam's execution
-    const actionLabel = task.task_name;
-    const urlRef = task.resources?.websiteUrl ? ` on ${task.resources.websiteUrl}` : '';
-    resultSummary = `Maryam successfully executed "${actionLabel}"${urlRef}. Tasks instructions processed: "${task.instructions.slice(0, 100)}..." Complete operational output logged.`;
+    real = await executeTaskInstructions(task, executor, { preApproved: opts.preApproved });
   } catch (err: any) {
-    executionSuccess = false;
-    errorMessage = err.message || 'Execution error encountered.';
+    real = {
+      success: false,
+      result_summary: `Execution failed: ${err?.message || 'unknown error'}`,
+      error: err?.message || 'Execution error encountered.',
+    };
   }
+
+  const executionSuccess = real.success === true;
+  const needsApproval = !executionSuccess && !!real.needsApproval;
+  const resultSummary = real.result_summary || '';
+  const errorMessage: string | null = needsApproval
+    ? (real.needsApproval?.reason || 'Owner approval required.')
+    : (real.error || (executionSuccess ? null : 'Execution failed.'));
 
   const finishedAtIso = new Date().toISOString();
   const duration = Date.now() - startTime;
+  const finalStatus = executionSuccess ? 'COMPLETED' : needsApproval ? 'NEEDS_APPROVAL' : 'FAILED';
 
-  // 3. Finalize Run record
+  // 3. Finalize Run record with the REAL executor result
   const runIdx = runs.findIndex((r) => r.run_id === runId);
   if (runIdx !== -1) {
     runs[runIdx].finished_at = finishedAtIso;
-    runs[runIdx].status = executionSuccess ? 'COMPLETED' : 'FAILED';
+    runs[runIdx].status = finalStatus;
     runs[runIdx].result_summary = resultSummary || null;
-    runs[runIdx].error = errorMessage;
+    runs[runIdx].error = executionSuccess ? null : errorMessage;
     runs[runIdx].duration_ms = duration;
+    runs[runIdx].output = real.output || null;
     saveJson(RUNS_FILE, runs);
   }
 
-  // 4. Update task record
+  // 4. Update task record with genuine outcome
   task.last_run_at = finishedAtIso;
   task.latest_result = resultSummary || null;
-  task.latest_error = errorMessage;
+  task.latest_error = executionSuccess ? null : errorMessage;
+  task.latest_output = real.output || null;
   task.execution_count = (task.execution_count || 0) + 1;
   task.updated_at = finishedAtIso;
 
-  if (task.task_type === 'one_time') {
+  if (needsApproval) {
+    task.status = 'NEEDS_APPROVAL';
+    task.progress = 'Awaiting owner approval';
+    task.next_run_at = null;
+  } else if (task.task_type === 'one_time') {
     task.status = executionSuccess ? 'COMPLETED' : 'FAILED';
     task.progress = executionSuccess ? 'Completed' : 'Failed';
     task.next_run_at = null;
@@ -494,6 +502,21 @@ export async function executeTaskNow(taskId: string): Promise<{ task: ScheduledT
   }
 
   saveJson(TASKS_FILE, tasks);
+
+  // Owner notification fan-out (Telegram): COMPLETED / FAILED / BLOCKED.
+  try {
+    const { emitTaskEvent } = await import('./taskNotify');
+    emitTaskEvent({
+      kind: finalStatus,
+      taskId: task.task_id,
+      taskName: task.task_name,
+      summary: resultSummary || null,
+      error: executionSuccess ? null : errorMessage,
+      outputPath: real.output?.output_path || null,
+      outputUrl: real.output?.output_url || null,
+      at: finishedAtIso,
+    });
+  } catch (_) {}
 
   return {
     task,

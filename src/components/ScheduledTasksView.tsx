@@ -25,13 +25,14 @@ import {
   TaskSummaryCounts,
   TaskStatus,
 } from '../types/taskManagement';
+import { getOwnerToken } from '../lib/ownerAuth';
 
 interface ScheduledTasksViewProps {
   onNavigateToCreate: () => void;
   authToken?: string;
 }
 
-type FilterStatus = 'ALL' | 'SCHEDULED' | 'PENDING' | 'IN PROGRESS' | 'COMPLETED' | 'FAILED' | 'PAUSED';
+type FilterStatus = 'ALL' | 'SCHEDULED' | 'PENDING' | 'IN PROGRESS' | 'COMPLETED' | 'FAILED' | 'PAUSED' | 'NEEDS_APPROVAL';
 
 export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   onNavigateToCreate,
@@ -61,14 +62,64 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   // Action status state
   const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [openActionMessage, setOpenActionMessage] = useState<string | null>(null);
+
+  // Canonical owner session token: prop first, stored valid session as fallback.
+  const effectiveTaskToken = authToken || getOwnerToken();
+
+  // Open real output locations through the existing owner-guarded runner pipeline.
+  const runOpenPathAction = async (
+    kind: 'file' | 'folder' | 'website',
+    outputPath?: string | null,
+    outputUrl?: string | null,
+    outputType?: string | null
+  ) => {
+    setOpenActionMessage(null);
+    try {
+      if (kind === 'website') {
+        if (!outputUrl) {
+          setOpenActionMessage('No website URL was returned by execution.');
+          return;
+        }
+        window.open(outputUrl, '_blank', 'noopener,noreferrer');
+        setOpenActionMessage(`Opened website: ${outputUrl}`);
+        return;
+      }
+      if (!outputPath) {
+        setOpenActionMessage('No output path was returned by execution.');
+        return;
+      }
+      const isFolder = outputType === 'folder' || outputType === 'project';
+      const appName = kind === 'folder' || isFolder ? 'explorer' : 'notepad';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
+      }
+      const res = await fetch('/api/runner/execute', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ tool: 'system.open_app', params: { appName, filePath: outputPath } }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const result = data.result || {};
+      if (result.status === 'launched' || result.launched || result.pid) {
+        setOpenActionMessage(`Opened ${kind === 'folder' || isFolder ? 'folder' : 'file'}: ${outputPath}`);
+      } else {
+        setOpenActionMessage(result.error || result.message || 'Open action did not confirm launch.');
+      }
+    } catch (err: any) {
+      setOpenActionMessage(err?.message || 'Open action failed.');
+    }
+  };
 
   const fetchTasks = useCallback(async () => {
     setIsLoading(true);
     try {
       const headers: Record<string, string> = {};
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
 
       const res = await fetch('/api/hoorvia/tasks', { headers });
@@ -99,9 +150,9 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     setIsLoadingDetails(true);
     try {
       const headers: Record<string, string> = {};
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
       const res = await fetch(`/api/hoorvia/tasks/${taskId}`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -120,9 +171,9 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     setNotification(null);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
       const res = await fetch(`/api/hoorvia/tasks/${taskId}/run`, {
         method: 'POST',
@@ -150,9 +201,9 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     setActionInProgressId(taskId);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
       const res = await fetch(`/api/hoorvia/tasks/${taskId}/pause`, {
         method: 'POST',
@@ -175,9 +226,9 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     setActionInProgressId(taskId);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
       const res = await fetch(`/api/hoorvia/tasks/${taskId}/resume`, {
         method: 'POST',
@@ -200,9 +251,9 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     setActionInProgressId(taskId);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers['x-hoorvia-token'] = authToken;
-        headers['Authorization'] = `Bearer ${authToken}`;
+      if (effectiveTaskToken) {
+        headers['x-hoorvia-token'] = effectiveTaskToken;
+        headers['Authorization'] = `Bearer ${effectiveTaskToken}`;
       }
       const res = await fetch(`/api/hoorvia/tasks/${taskId}/cancel`, {
         method: 'POST',
@@ -271,6 +322,8 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
         return <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-zinc-800/70 text-zinc-300 border border-zinc-600/40">PAUSED</span>;
       case 'CANCELLED':
         return <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-zinc-900 text-zinc-500 border border-zinc-700/40">CANCELLED</span>;
+      case 'NEEDS_APPROVAL':
+        return <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-950/70 text-amber-300 border border-amber-600/40">NEEDS APPROVAL</span>;
       case 'PENDING':
       default:
         return <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-950/70 text-purple-300 border border-purple-600/40">PENDING</span>;
@@ -389,6 +442,7 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 'IN PROGRESS',
                 'COMPLETED',
                 'FAILED',
+                'NEEDS_APPROVAL',
                 'PAUSED',
               ] as FilterStatus[]
             ).map((filter) => (
@@ -665,6 +719,112 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                     </div>
                   )}
 
+                  {/* Real output location (from the genuine executor result - never guessed) */}
+                  {selectedTaskDetails.task.latest_output &&
+                    (selectedTaskDetails.task.latest_output.output_name ||
+                      selectedTaskDetails.task.latest_output.output_path ||
+                      selectedTaskDetails.task.latest_output.output_url) && (
+                      <div>
+                        <h4 className="text-xs font-semibold uppercase tracking-wider text-rose-200 mb-1">
+                          Where The Output Went
+                        </h4>
+                        <div className="p-3.5 rounded-2xl bg-black/50 border border-white/10 space-y-1.5">
+                          {selectedTaskDetails.task.latest_output.output_name && (
+                            <p className="text-xs text-white font-semibold">
+                              {selectedTaskDetails.task.latest_output.output_name}
+                            </p>
+                          )}
+                          {selectedTaskDetails.task.latest_output.output_path && (
+                            <p className="text-[11px] text-zinc-300 font-mono break-all">
+                              Location: {selectedTaskDetails.task.latest_output.output_path}
+                            </p>
+                          )}
+                          {selectedTaskDetails.task.latest_output.output_url && (
+                            <p className="text-[11px] text-emerald-300 font-mono break-all">
+                              Live URL: {selectedTaskDetails.task.latest_output.output_url}
+                            </p>
+                          )}
+                          {selectedTaskDetails.task.latest_output.executor && (
+                            <p className="text-[10px] text-zinc-500">
+                              Executor: {selectedTaskDetails.task.latest_output.executor}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                            {(selectedTaskDetails.task.latest_output.output_type === 'folder' ||
+                              selectedTaskDetails.task.latest_output.output_type === 'project') &&
+                              selectedTaskDetails.task.latest_output.output_path && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    runOpenPathAction(
+                                      'folder',
+                                      selectedTaskDetails.task.latest_output?.output_path,
+                                      null,
+                                      selectedTaskDetails.task.latest_output?.output_type
+                                    )
+                                  }
+                                  className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-100"
+                                >
+                                  Open Folder
+                                </button>
+                              )}
+                            {selectedTaskDetails.task.latest_output.output_type === 'file' &&
+                              selectedTaskDetails.task.latest_output.output_path && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      runOpenPathAction(
+                                        'file',
+                                        selectedTaskDetails.task.latest_output?.output_path,
+                                        null,
+                                        'file'
+                                      )
+                                    }
+                                    className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-100"
+                                  >
+                                    Open File
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      runOpenPathAction(
+                                        'folder',
+                                        selectedTaskDetails.task.latest_output?.output_path,
+                                        null,
+                                        'file'
+                                      )
+                                    }
+                                    className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-100"
+                                  >
+                                    Open Folder
+                                  </button>
+                                </>
+                              )}
+                            {selectedTaskDetails.task.latest_output.output_url && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  runOpenPathAction(
+                                    'website',
+                                    null,
+                                    selectedTaskDetails.task.latest_output?.output_url,
+                                    'website'
+                                  )
+                                }
+                                className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/40 text-emerald-200"
+                              >
+                                Open Website
+                              </button>
+                            )}
+                          </div>
+                          {openActionMessage && (
+                            <p className="text-[11px] text-zinc-400">{openActionMessage}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                   {/* Run History List */}
                   <div className="space-y-2 pt-2 border-t border-rose-900/30">
                     <h4 className="text-xs font-semibold uppercase tracking-wider text-rose-200 flex items-center justify-between">
@@ -705,6 +865,16 @@ export const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                             )}
                             {run.error && (
                               <p className="text-[11px] text-rose-300 mt-1">Error: {run.error}</p>
+                            )}
+                            {run.output?.output_path && (
+                              <p className="text-[11px] text-zinc-400 font-mono break-all mt-1">
+                                Location: {run.output.output_path}
+                              </p>
+                            )}
+                            {run.output?.output_url && (
+                              <p className="text-[11px] text-emerald-300 font-mono break-all mt-1">
+                                Live URL: {run.output.output_url}
+                              </p>
                             )}
                           </div>
                         ))}

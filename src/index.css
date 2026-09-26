@@ -80,17 +80,21 @@ body,
 }
 
 /* Custom scrollbar for chat & panels */
+.custom-scrollbar::-webkit-scrollbar,
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;
 }
+.custom-scrollbar::-webkit-scrollbar-track,
 ::-webkit-scrollbar-track {
   background: rgba(10, 10, 15, 0.5);
 }
+.custom-scrollbar::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-thumb {
   background: rgba(225, 29, 72, 0.25);
   border-radius: 9999px;
 }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(225, 29, 72, 0.5);
 }

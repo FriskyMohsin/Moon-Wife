@@ -20,6 +20,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { TelegramConfigStatus } from '../lib/maryamTelegram';
+import { getOwnerToken } from '../lib/ownerAuth';
 
 interface HoorviaTelegramManagerProps {
   ownerToken?: string | null;
@@ -39,10 +40,12 @@ export const HoorviaTelegramManager: React.FC<HoorviaTelegramManagerProps> = ({ 
   const fetchStatus = async () => {
     setIsLoading(true);
     try {
+      // Canonical owner session token (prop first, stored session as fallback).
+      const effectiveOwnerToken = ownerToken || getOwnerToken();
       const headers: Record<string, string> = {};
-      if (ownerToken) {
-        headers['Authorization'] = `Bearer ${ownerToken}`;
-        headers['x-hoorvia-token'] = ownerToken;
+      if (effectiveOwnerToken) {
+        headers['Authorization'] = `Bearer ${effectiveOwnerToken}`;
+        headers['x-hoorvia-token'] = effectiveOwnerToken;
       }
       const res = await fetch('/api/telegram/status', { headers });
       if (res.ok) {
@@ -74,10 +77,11 @@ export const HoorviaTelegramManager: React.FC<HoorviaTelegramManagerProps> = ({ 
     setIsSendingTest(true);
     setActionMessage(null);
     try {
+      const effectiveOwnerToken = ownerToken || getOwnerToken();
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (ownerToken) {
-        headers['Authorization'] = `Bearer ${ownerToken}`;
-        headers['x-hoorvia-token'] = ownerToken;
+      if (effectiveOwnerToken) {
+        headers['Authorization'] = `Bearer ${effectiveOwnerToken}`;
+        headers['x-hoorvia-token'] = effectiveOwnerToken;
       }
       const res = await fetch('/api/telegram/test-message', {
         method: 'POST',
@@ -110,10 +114,11 @@ export const HoorviaTelegramManager: React.FC<HoorviaTelegramManagerProps> = ({ 
     setSimIsRunning(true);
     setSimOutput(null);
     try {
+      const effectiveOwnerToken = ownerToken || getOwnerToken();
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (ownerToken) {
-        headers['Authorization'] = `Bearer ${ownerToken}`;
-        headers['x-hoorvia-token'] = ownerToken;
+      if (effectiveOwnerToken) {
+        headers['Authorization'] = `Bearer ${effectiveOwnerToken}`;
+        headers['x-hoorvia-token'] = effectiveOwnerToken;
       }
       const res = await fetch('/api/telegram/simulate', {
         method: 'POST',
@@ -210,7 +215,9 @@ export const HoorviaTelegramManager: React.FC<HoorviaTelegramManagerProps> = ({ 
           <div className="mt-2 flex items-center gap-2">
             <div
               className={`w-2.5 h-2.5 rounded-full ${
-                status?.connectionStatus === 'CONNECTED' || status?.connectionStatus === 'POLLING'
+                status?.pollConflict
+                  ? 'bg-red-400 animate-pulse'
+                  : status?.connectionStatus === 'CONNECTED' || status?.connectionStatus === 'POLLING'
                   ? 'bg-emerald-400 animate-pulse'
                   : status?.connectionStatus === 'WEBHOOK'
                   ? 'bg-blue-400'
@@ -218,11 +225,13 @@ export const HoorviaTelegramManager: React.FC<HoorviaTelegramManagerProps> = ({ 
               }`}
             />
             <span className="text-sm font-bold text-white tracking-wide">
-              {status?.connectionStatus || 'CHECKING...'}
+              {status?.pollConflict ? 'CONFLICT - DUPLICATE POLLER' : status?.connectionStatus || 'CHECKING...'}
             </span>
           </div>
           <p className="text-[11px] text-zinc-500 mt-1">
-            {status?.connectionStatus === 'CONNECTED' || status?.connectionStatus === 'POLLING'
+            {status?.pollConflict
+              ? `Another poller holds this bot token (${status.pollConflictCount}x 409). Ensure only ONE Maryam server polls.`
+              : status?.connectionStatus === 'CONNECTED' || status?.connectionStatus === 'POLLING'
               ? 'Active 24/7 Long-Polling Daemon'
               : status?.connectionStatus === 'WEBHOOK'
               ? 'Active via Webhook Ingress'

@@ -35,7 +35,8 @@ export async function handleHoorviaLiveWsConnection(
   preValidatedAuth?: any
 ) {
   const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-  const token = url.searchParams.get('token') || (req.headers['x-hoorvia-token'] as string);
+  // Accept both canonical `token` and the owner client's `ownerToken` param.
+  const token = url.searchParams.get('token') || url.searchParams.get('ownerToken') || (req.headers['x-hoorvia-token'] as string);
 
   // Safe client error listener attached immediately
   clientWs.on('error', (err) => {

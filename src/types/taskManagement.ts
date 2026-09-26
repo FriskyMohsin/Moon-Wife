@@ -1,11 +1,11 @@
 export type TaskType = 'one_time' | 'daily' | 'weekly' | 'monthly' | 'custom';
 export type TaskPriority = 'normal' | 'high' | 'critical';
 export type TaskApprovalMode = 'automatic' | 'ask_owner';
-export type TaskStatus = 'SCHEDULED' | 'PENDING' | 'IN PROGRESS' | 'COMPLETED' | 'FAILED' | 'PAUSED' | 'CANCELLED';
+export type TaskStatus = 'SCHEDULED' | 'PENDING' | 'IN PROGRESS' | 'COMPLETED' | 'FAILED' | 'PAUSED' | 'CANCELLED' | 'NEEDS_APPROVAL';
 
 export interface TaskScheduleConfig {
-  startDate: string; // YYYY-MM-DD
-  startTime: string; // HH:mm
+  startDate?: string; // YYYY-MM-DD (optional; omitted for run-now tasks)
+  startTime?: string; // HH:mm (optional; omitted for run-now tasks)
   deadline?: string; // Optional deadline for one-time task (YYYY-MM-DD)
   endDate?: string; // Optional end date for recurring (YYYY-MM-DD)
   daysOfWeek?: string[]; // e.g. ['monday', 'friday'] for weekly
@@ -13,6 +13,28 @@ export interface TaskScheduleConfig {
   customInterval?: number; // e.g. 2
   customUnit?: 'days' | 'weeks'; // e.g. 'days' or 'weeks'
   customDays?: string[];
+  runImmediately?: boolean; // true for normal "Create Task = run NOW" tasks
+}
+
+/**
+ * Real executor result location. Populated ONLY from genuine executor output -
+ * paths/URLs are never guessed or fabricated.
+ */
+export interface TaskOutputLocation {
+  output_type?: 'file' | 'folder' | 'project' | 'website' | 'text' | 'none';
+  output_name?: string | null;
+  output_path?: string | null;
+  output_url?: string | null;
+  result_summary?: string | null;
+  executor?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error?: string | null;
+  // Carries a runner-issued owner-confirmation challenge when genuine
+  // elevation/approval is required (NEEDS_APPROVAL path).
+  confirmationId?: string | null;
+  confirmationAction?: string | null;
+  confirmationReason?: string | null;
 }
 
 export interface ScheduledTask {
@@ -36,6 +58,7 @@ export interface ScheduledTask {
   progress: string; // Real execution progress string, e.g. 'Idle', 'Scheduled', 'Running', 'Completed', 'Failed', 'Paused'
   latest_result: string | null;
   latest_error: string | null;
+  latest_output?: TaskOutputLocation | null;
   execution_count: number;
 }
 
@@ -45,10 +68,11 @@ export interface TaskRunHistory {
   task_name: string;
   started_at: string;
   finished_at: string | null;
-  status: 'IN PROGRESS' | 'COMPLETED' | 'FAILED';
+  status: 'IN PROGRESS' | 'COMPLETED' | 'FAILED' | 'NEEDS_APPROVAL';
   result_summary: string | null;
   error: string | null;
   duration_ms?: number;
+  output?: TaskOutputLocation | null;
 }
 
 export interface TaskSummaryCounts {

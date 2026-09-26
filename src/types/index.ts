@@ -59,6 +59,8 @@ export interface ChatMessage {
 
 export type GeminiVoiceName = 'Aoede' | 'Kore' | 'Zephyr' | 'Puck' | 'Fenrir' | 'Charon';
 
+export type PlatformMode = 'hoorvia' | 'mohsin_maryam' | 'owner' | 'public';
+
 export type WakeSensitivity = 'strict' | 'balanced' | 'sensitive';
 export type WakeWordStatus = 'idle' | 'waiting' | 'detected' | 'active' | 'unsupported' | 'error';
 export type MicPermissionStatus = 'granted' | 'prompt' | 'denied' | 'unknown';

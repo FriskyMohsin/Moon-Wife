@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
+import { resolveDataPath } from './runtimePaths';
+import { readJsonSafeSync, writeJsonAtomicSync } from './dataPersistence';
 import { getLanguageDirective } from './languageCatalog';
 import {
   UserRole,
@@ -75,41 +77,26 @@ export {
 
 // --- FILE PATHS & INITIALIZATION ---
 
-const PLATFORM_DIR = path.join(process.cwd(), 'data', 'hoorvia_platform');
-
-function ensurePlatformDir() {
-  if (!fs.existsSync(PLATFORM_DIR)) {
-    fs.mkdirSync(PLATFORM_DIR, { recursive: true });
-  }
+function ensurePlatformDir(): void {
+  resolveDataPath('hoorvia_platform');
 }
 
 function getFilePath(filename: string): string {
-  ensurePlatformDir();
-  return path.join(PLATFORM_DIR, filename);
+  return resolveDataPath('hoorvia_platform', filename);
 }
 
 function loadJsonData<T>(filename: string, defaultValue: T): T {
-  try {
-    const p = getFilePath(filename);
-    if (!fs.existsSync(p)) {
-      saveJsonData(filename, defaultValue);
-      return defaultValue;
-    }
-    const raw = fs.readFileSync(p, 'utf-8');
-    return JSON.parse(raw) as T;
-  } catch (err) {
-    console.error(`Error loading JSON ${filename}:`, err);
+  const p = getFilePath(filename);
+  if (!fs.existsSync(p)) {
+    saveJsonData(filename, defaultValue);
     return defaultValue;
   }
+  return readJsonSafeSync<T>(p, defaultValue);
 }
 
 function saveJsonData<T>(filename: string, data: T): void {
-  try {
-    const p = getFilePath(filename);
-    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error(`Error saving JSON ${filename}:`, err);
-  }
+  const p = getFilePath(filename);
+  writeJsonAtomicSync(p, data);
 }
 
 // --- ENCRYPTION SETUP ---
