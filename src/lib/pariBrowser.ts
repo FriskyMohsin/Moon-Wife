@@ -365,7 +365,8 @@ export async function browserSnapshot(userId: string): Promise<BrowserActionResu
     const session = await resolveSession(userId);
     // YAML accessibility tree; interactive nodes carry [ref=eN] tokens that
     // browserClick / browserType consume via the aria-ref selector engine.
-    const text0 = await session.page.locator('body').ariaSnapshot().catch(() => '');
+    // mode:'ai' is REQUIRED — without it no [ref=...] tokens are emitted.
+    const text0 = await session.page.locator('body').ariaSnapshot({ mode: 'ai' }).catch(() => '');
     let text = text0;
     if (text.length > SNAPSHOT_MAX_CHARS) {
       text = text.slice(0, SNAPSHOT_MAX_CHARS) + '\n…[truncated]';
