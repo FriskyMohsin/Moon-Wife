@@ -1159,14 +1159,17 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   );
 
   const renderUsageBar = (label: string, used: number, limit: number, unit: string) => {
-    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-    const over = limit > 0 && used >= limit;
+    // Defensive: API returns limits as { perDay, perWeek } objects — never render an object as a React child.
+    const lim = Number(limit) || 0;
+    const u = Number(used) || 0;
+    const pct = lim > 0 ? Math.min(100, Math.round((u / lim) * 100)) : 0;
+    const over = lim > 0 && u >= lim;
     return (
       <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800">
         <div className="flex items-center justify-between text-xs mb-2">
           <span className="text-slate-300 font-medium">{label}</span>
           <span className={`font-mono ${over ? 'text-rose-400 font-bold' : 'text-slate-400'}`}>
-            {used}/{limit} {unit}
+            {u}/{lim} {unit}
           </span>
         </div>
         <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
@@ -1176,7 +1179,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5">
-          {over ? 'Limit reached — resets automatically.' : `${limit - used} ${unit} left.`}
+          {over ? 'Limit reached — resets automatically.' : `${lim - u} ${unit} left.`}
         </p>
       </div>
     );
@@ -2183,19 +2186,19 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Today</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {renderUsageBar('Chats', clientUsage.today.chat, clientUsage.limits.chat, 'chats')}
-                    {renderUsageBar('Images', clientUsage.today.images, clientUsage.limits.images, 'images')}
-                    {renderUsageBar('Files', clientUsage.today.files, clientUsage.limits.files, 'files')}
-                    {renderUsageBar('Voice call minutes', clientUsage.today.liveMinutes, clientUsage.limits.liveMinutes, 'min')}
+                    {renderUsageBar('Chats', clientUsage.today.chat, clientUsage.limits.chat.perDay, 'chats')}
+                    {renderUsageBar('Images', clientUsage.today.images, clientUsage.limits.images.perDay, 'images')}
+                    {renderUsageBar('Files', clientUsage.today.files, clientUsage.limits.files.perDay, 'files')}
+                    {renderUsageBar('Voice call minutes', clientUsage.today.liveMinutes, clientUsage.limits.liveMinutes.perDay, 'min')}
                   </div>
                 </div>
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">This week</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {renderUsageBar('Chats', clientUsage.week.chat, clientUsage.limits.chat, 'chats')}
-                    {renderUsageBar('Images', clientUsage.week.images, clientUsage.limits.images, 'images')}
-                    {renderUsageBar('Files', clientUsage.week.files, clientUsage.limits.files, 'files')}
-                    {renderUsageBar('Voice call minutes', clientUsage.week.liveMinutes, clientUsage.limits.liveMinutes, 'min')}
+                    {renderUsageBar('Chats', clientUsage.week.chat, clientUsage.limits.chat.perWeek, 'chats')}
+                    {renderUsageBar('Images', clientUsage.week.images, clientUsage.limits.images.perWeek, 'images')}
+                    {renderUsageBar('Files', clientUsage.week.files, clientUsage.limits.files.perWeek, 'files')}
+                    {renderUsageBar('Voice call minutes', clientUsage.week.liveMinutes, clientUsage.limits.liveMinutes.perWeek, 'min')}
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-500">
