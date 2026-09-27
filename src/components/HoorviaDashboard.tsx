@@ -149,6 +149,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   // Memory form state
   const [newMemoryFact, setNewMemoryFact] = useState<string>('');
   const [newMemoryCategory, setNewMemoryCategory] = useState<string>('preference');
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [editMemoryFact, setEditMemoryFact] = useState<string>('');
+  const [editMemoryCategory, setEditMemoryCategory] = useState<string>('preference');
 
   // Files & Studio state
   const [fileType, setFileType] = useState<'pptx' | 'docx' | 'pdf' | 'epub' | 'xlsx'>('pptx');
@@ -775,6 +778,37 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
       fetchMemories();
     } catch (err) {
       console.error('Error deleting memory:', err);
+    }
+  };
+
+  const handleStartEditMemory = (m: any) => {
+    setEditingMemoryId(m.id);
+    setEditMemoryFact(m.fact || '');
+    setEditMemoryCategory(m.category || 'preference');
+  };
+
+  const handleCancelEditMemory = () => {
+    setEditingMemoryId(null);
+    setEditMemoryFact('');
+  };
+
+  const handleSaveMemoryEdit = async () => {
+    if (!editingMemoryId || !editMemoryFact.trim()) return;
+    try {
+      const res = await fetch(`/api/hoorvia/memories/${editingMemoryId}`, {
+        method: 'PATCH',
+        headers: {
+          ...authHeaders(token),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fact: editMemoryFact.trim(), category: editMemoryCategory }),
+      });
+      if (res.ok) {
+        handleCancelEditMemory();
+        fetchMemories();
+      }
+    } catch (err) {
+      console.error('Error editing memory:', err);
     }
   };
 
@@ -1836,7 +1870,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 leading-relaxed">
               <strong className="text-slate-200">How it works:</strong> Pari AI now auto-remembers in any language.
               Mention something in chat — your routine, preferences, people, goals — and it is saved here automatically.
-              You can add, edit (delete + re-add), or wipe memories anytime.
+              You can add, edit, or wipe memories anytime.
             </div>
 
             {/* Add Memory Form */}
@@ -1877,21 +1911,67 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 memories.map((m) => (
                   <div
                     key={m.id}
-                    className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between text-xs"
+                    className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800/40 shrink-0">
-                        {m.category}
-                      </span>
-                      <span className="text-slate-200">{m.fact}</span>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteMemory(m.id)}
-                      className="text-slate-500 hover:text-rose-400 p-1 shrink-0"
-                      title="Delete memory"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {editingMemoryId === m.id ? (
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="text"
+                          value={editMemoryFact}
+                          onChange={(e) => setEditMemoryFact(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveMemoryEdit(); if (e.key === 'Escape') handleCancelEditMemory(); }}
+                          className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs focus:outline-none focus:border-rose-500"
+                          autoFocus
+                        />
+                        <select
+                          value={editMemoryCategory}
+                          onChange={(e) => setEditMemoryCategory(e.target.value)}
+                          className="px-2 py-2 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs focus:outline-none"
+                        >
+                          <option value="preference">Preference</option>
+                          <option value="personal">Personal</option>
+                          <option value="goal">Goal</option>
+                          <option value="general">General</option>
+                        </select>
+                        <button
+                          onClick={handleSaveMemoryEdit}
+                          className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={handleCancelEditMemory}
+                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800/40 shrink-0">
+                            {m.category}
+                          </span>
+                          <span className="text-slate-200">{m.fact}</span>
+                        </div>
+                        <div className="flex items-center shrink-0">
+                          <button
+                            onClick={() => handleStartEditMemory(m)}
+                            className="text-slate-500 hover:text-rose-300 p-1"
+                            title="Edit memory"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMemory(m.id)}
+                            className="text-slate-500 hover:text-rose-400 p-1"
+                            title="Delete memory"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))
               )}

@@ -24,6 +24,7 @@ import {
   getUserCompanionMemories,
   addUserCompanionMemory,
   deleteUserCompanionMemory,
+  updateUserCompanionMemory,
   resetAllUserCompanionMemories,
   getPlatformPolicy,
   updatePlatformPolicy,
@@ -730,6 +731,14 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     const memoryId = req.params.id;
     const deleted = deleteUserCompanionMemory(req.hoorviaUser!.id, memoryId);
     res.json({ status: 'ok', deleted });
+  });
+
+  app.patch('/api/hoorvia/memories/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const memoryId = req.params.id;
+    const { fact, category } = req.body || {};
+    const updated = updateUserCompanionMemory(req.hoorviaUser!.id, memoryId, { fact, category });
+    if (!updated) return res.status(404).json({ error: 'Memory not found.' });
+    res.json({ status: 'ok', memory: updated });
   });
 
   app.post('/api/hoorvia/memories/reset', authMiddleware, (req: AuthenticatedRequest, res: Response) => {

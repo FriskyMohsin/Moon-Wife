@@ -2504,6 +2504,20 @@ export function deleteUserCompanionMemory(userId: string, memoryId: string): boo
   return memories.filter((m) => m.userId === userId).length < initial;
 }
 
+export function updateUserCompanionMemory(
+  userId: string,
+  memoryId: string,
+  patch: { fact?: string; category?: UserMemoryItem['category'] }
+): UserMemoryItem | null {
+  const memories = loadJsonData<UserMemoryItem[]>('memories.json', []);
+  const item = memories.find((m) => m.id === memoryId && m.userId === userId);
+  if (!item) return null;
+  if (typeof patch.fact === 'string' && patch.fact.trim()) item.fact = patch.fact.trim();
+  if (patch.category) item.category = patch.category;
+  saveJsonData('memories.json', memories);
+  return item;
+}
+
 export function resetAllUserCompanionMemories(userId: string, companionId?: string): number {
   let memories = loadJsonData<UserMemoryItem[]>('memories.json', []);
   const initial = memories.filter((m) => m.userId === userId).length;
