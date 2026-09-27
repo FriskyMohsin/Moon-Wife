@@ -1605,14 +1605,14 @@ export default function App() {
         user={hoorviaUser}
         initialCompanion={
           hoorviaCompanion || {
-            name: 'Aria',
-            type: 'girlfriend',
+            name: 'Pari AI',
+            type: 'pari_assistant',
             gender: 'female',
             voice: 'Aoede',
             language: 'English',
-            personality: 'Warm, deeply attentive, intelligent, and emotionally supportive companion.',
-            systemPrompt: 'You are Aria, an affectionate and caring AI companion.',
-            tone: 'Romantic',
+            personality: 'Pari AI — your personal AI companion. Warm, helpful, and proactive.',
+            systemPrompt: 'You are Pari AI, a warm and helpful personal AI companion.',
+            tone: 'Friendly',
           }
         }
         onLogout={handleHoorviaLogout}
