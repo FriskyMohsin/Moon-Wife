@@ -31,6 +31,11 @@ import {
   respondToLiveToolCalls,
   voiceBrowserDebugLog,
 } from './pariBrowserTools';
+import {
+  PRODUCTIVITY_TOOL_DECLARATIONS,
+  PRODUCTIVITY_TOOL_NAMES,
+  respondToLiveProductivityToolCalls,
+} from './pariVoiceProductivityTools';
 
 export function registerHoorviaLiveWs(server: HttpServer) {
   // Legacy hook maintained for compatibility if needed
@@ -188,7 +193,7 @@ export async function handleHoorviaLiveWsConnection(
 1. Speak in ${publicLang} naturally and fluently.
 2. Keep spoken turns concise, conversational, and direct (1-3 sentences).
 3. Do not output markdown or code blocks in spoken audio mode.
-4. Browser control by voice: if the user asks you to use their private server-side web browser (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo"), you MUST call the matching browser_* tool FIRST and wait for its result — only then confirm briefly. NEVER say you opened/played/paused anything unless you actually called the tool and it returned success. Claiming an action without calling the tool is lying and is strictly forbidden. Never invent URLs; if the destination is unclear, ask which page to open.`;
+4. Browser control by voice: if the user asks you to use their private server-side web browser (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo"), you MUST call the matching browser_* tool FIRST and wait for its result — only then confirm briefly. NEVER say you opened/played/paused anything unless you actually called the tool and it returned success. Claiming an action without calling the tool is lying and is strictly forbidden. Never invent URLs; if the destination is unclear, ask which page to open.\n5. Tasks and files by voice: if the user asks you to create a task, save a prompt or note as a file, or generate a presentation (PPTX) or document (DOCX/PDF), you MUST call the matching tool (create_task, save_text_file, generate_presentation, generate_document) FIRST and wait for its result — only then confirm briefly. NEVER say you created, saved, or generated anything unless the tool actually returned success. After a successful file generation, tell the user the file is ready in the Files & Studio tab.`;
 
   const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
@@ -374,7 +379,11 @@ export async function handleHoorviaLiveWsConnection(
             // Pari AI Phase 2: the same 8 browser_* tools as text chat, shared
             // via pariBrowserTools so voice commands ("YouTube kholo", ...)
             // drive the user's private server-side browser too.
-            tools: [{ functionDeclarations: BROWSER_TOOL_DECLARATIONS }],
+            // Phase 2b: plus the voice productivity tools (create_task,
+            // save_text_file, generate_presentation, generate_document) so a
+            // voice call can create tasks and generate files like the chat
+            // and Files & Studio UI do.
+            tools: [{ functionDeclarations: [...BROWSER_TOOL_DECLARATIONS, ...PRODUCTIVITY_TOOL_DECLARATIONS] }],
           },
           callbacks: {
             onmessage: async (message: LiveServerMessage) => {
@@ -390,16 +399,24 @@ export async function handleHoorviaLiveWsConnection(
               const liveToolCalls = (message as any)?.toolCall?.functionCalls;
               if (Array.isArray(liveToolCalls) && liveToolCalls.length > 0) {
                 console.log(
-                  `[LIVE_TOOL_CALL] ${liveToolCalls.length} browser call(s) for user ${userId}: ` +
+                  `[LIVE_TOOL_CALL] ${liveToolCalls.length} tool call(s) for user ${userId}: ` +
                     liveToolCalls.map((c: any) => c?.name).join(', ')
                 );
                 voiceBrowserDebugLog(
                   `TOOLCALL user=${userId} tools=${liveToolCalls.map((c: any) => c?.name).join(',')}`
                 );
                 try {
-                  await respondToLiveToolCalls(liveSession, userId, liveToolCalls);
+                  const browserCalls = liveToolCalls.filter((c: any) =>
+                    String(c?.name || '').startsWith('browser_')
+                  );
+                  const prodCalls = liveToolCalls.filter((c: any) =>
+                    (PRODUCTIVITY_TOOL_NAMES as readonly string[]).includes(String(c?.name || ''))
+                  );
+                  if (browserCalls.length > 0) await respondToLiveToolCalls(liveSession, userId, browserCalls);
+                  if (prodCalls.length > 0)
+                    await respondToLiveProductivityToolCalls(liveSession, userId, prodCalls, { isOwner });
                 } catch (err: any) {
-                  console.error('[Hoorvia Live WS] Browser tool call handling failed:', err?.message || err);
+                  console.error('[Hoorvia Live WS] Tool call handling failed:', err?.message || err);
                 }
               }
 

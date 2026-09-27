@@ -19,7 +19,7 @@ export interface ClientTask {
   repeat: PariTaskRepeat;
   priority: PariTaskPriority;
   status: PariTaskStatus;
-  source: 'chat' | 'manual' | 'reminder';
+  source: 'chat' | 'manual' | 'reminder' | 'voice';
   createdAt: string;
   updatedAt: string;
 }
