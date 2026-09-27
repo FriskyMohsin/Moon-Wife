@@ -70,6 +70,7 @@ export function saveUserFile(
   kind: PariFileKind
 ): PariFileMeta {
   const dir = safeUserDir(userId);
+  fs.mkdirSync(dir, { recursive: true });
   const absPath = path.join(dir, filename);
   fs.writeFileSync(absPath, buffer);
   const meta: PariFileMeta = {
