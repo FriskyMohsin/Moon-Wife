@@ -833,8 +833,9 @@ BROWSER CONTROL: You can control the user's private server-side web browser with
 
     // Pari AI: universal content search. Videos for anything the user wants
     // to SEE how to do (exercises, DIY, repairs); articles for anything they
-    // want to READ more about (medical queries use PubMed, the free official
-    // source). Only ever share links the tools returned — never invent URLs.
+    // want to READ more about (medical queries return a mix of PubMed plus
+    // authoritative sources like WHO/CDC/AHA/NIH/Mayo). Only ever share links
+    // the tools returned — never invent URLs.
     const CONTENT_SEARCH_PROMPT = `
 
 CONTENT SEARCH: You have two lookup tools.

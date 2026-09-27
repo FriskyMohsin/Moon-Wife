@@ -11,6 +11,7 @@ import {
   buildArticleSearchUrl,
   thumbnailUrlFor,
   isMedicalQuery,
+  isAuthorityDomain,
   searchVideos,
   searchArticles,
   clearContentSearchCache,
@@ -40,6 +41,16 @@ async function main() {
   assert.equal(isMedicalQuery('how to fix a leaking tap'), false);
   assert.equal(isMedicalQuery('best budget phones 2026'), false);
 
+  // --- Unit: authority domain detection ---
+  assert.equal(isAuthorityDomain('who.int'), true);
+  assert.equal(isAuthorityDomain('www.heart.org'), true);
+  assert.equal(isAuthorityDomain('professional.heart.org'), true);
+  assert.equal(isAuthorityDomain('CDC.GOV'), true);
+  assert.equal(isAuthorityDomain('mayoclinic.org'), true);
+  assert.equal(isAuthorityDomain('randomblog.com'), false);
+  assert.equal(isAuthorityDomain('notcdc.gov.evil.com'), false);
+  assert.equal(isAuthorityDomain(''), false);
+
   // --- Unit: empty query -> honest fallback, never throws ---
   clearContentSearchCache();
   const emptyV = await searchVideos('');
@@ -67,21 +78,48 @@ async function main() {
   const vids2 = await searchVideos('push up proper form');
   assert.deepEqual(vids2.videos.map((v) => v.videoId), vids.videos.map((v) => v.videoId));
 
-  // --- Integration: medical article search -> PubMed ---
+  // --- Integration: medical article search -> PubMed + authority MIX ---
+  // (retried a few times: the sandbox sometimes rate-limits DDG Lite)
   clearContentSearchCache();
-  const med = await searchArticles('vitamin D deficiency treatment');
-  assert.equal(med.fallback, false, 'expected real articles, got fallback');
-  assert.equal(med.source, 'pubmed', `expected pubmed, got ${med.source}`);
-  assert.ok(med.articles.length >= 1);
-  for (const a of med.articles) {
-    assert.ok(a.url.startsWith('https://pubmed.ncbi.nlm.nih.gov/'), `bad pubmed URL: ${a.url}`);
-    assert.ok(a.title.length > 0);
+  let med = await searchArticles('vitamin D deficiency treatment');
+  for (let attempt = 1; attempt < 3 && med.articles.every((a) => a.url.startsWith('https://pubmed.ncbi.nlm.nih.gov/')); attempt++) {
+    await new Promise((r) => setTimeout(r, 8000));
+    clearContentSearchCache();
+    med = await searchArticles('vitamin D deficiency treatment');
   }
-  console.log('pubmed proof:', med.articles[0].url, '|', med.articles[0].title.slice(0, 60));
+  assert.equal(med.fallback, false, 'expected real articles, got fallback');
+  assert.ok(med.articles.length >= 2, 'expected a mix of at least 2 articles');
+  const PUBMED_PREFIX = 'https://pubmed.ncbi.nlm.nih.gov/';
+  const hasPubmed = med.articles.some((a) => a.url.startsWith(PUBMED_PREFIX));
+  // A NON-PubMed authority: who.int / cdc.gov / heart.org / nih.gov / mayoclinic.org / ...
+  const hasNonPubmedAuthority = med.articles.some(
+    (a) => !a.url.startsWith(PUBMED_PREFIX) && isAuthorityDomain(a.domain)
+  );
+  assert.ok(hasPubmed, 'expected at least one PubMed link in the mix');
+  assert.ok(hasNonPubmedAuthority, 'expected at least one non-PubMed WHO/CDC/AHA/NIH/Mayo link in the mix');
+  assert.ok(['mixed', 'pubmed', 'duckduckgo'].includes(med.source), `unexpected source ${med.source}`);
+  // No fabricated URLs anywhere in the mix.
+  for (const a of med.articles) {
+    assert.ok(/^https?:\/\//.test(a.url), `bad article URL: ${a.url}`);
+    assert.ok(a.title.length > 0);
+    assert.ok(a.domain.length > 0);
+  }
+  // No duplicate URLs in the merged mix.
+  const urls = med.articles.map((a) => a.url);
+  assert.equal(new Set(urls).size, urls.length, 'duplicate URLs in merged mix');
+  console.log('medical mix proof:', med.source);
+  for (const a of med.articles) console.log('  -', a.domain, '->', a.url);
 
   // --- Integration: general article search -> DuckDuckGo ---
+  // (retried: the sandbox sometimes rate-limits DDG Lite after the searches above)
   clearContentSearchCache();
-  const web = await searchArticles('how to fix a leaking tap');
+  await new Promise((r) => setTimeout(r, 5000));
+  let web = await searchArticles('how to fix a leaking tap');
+  for (let attempt = 1; attempt < 3 && web.fallback; attempt++) {
+    await new Promise((r) => setTimeout(r, 10000));
+    clearContentSearchCache();
+    web = await searchArticles('how to fix a leaking tap');
+  }
   assert.equal(web.fallback, false, 'expected real articles, got fallback');
   assert.equal(web.source, 'duckduckgo', `expected duckduckgo, got ${web.source}`);
   assert.ok(web.articles.length >= 1);

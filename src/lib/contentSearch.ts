@@ -9,7 +9,10 @@
  *  - Videos: open-source `yt-dlp` CLI (tier 1), YouTube search-page scrape
  *    (tier 2, dependency-free), plain YouTube search URL (fallback).
  *  - Articles, medical/health: PubMed E-utilities (free official NCBI API,
- *    no key): esearch -> esummary.
+ *    no key) PLUS authoritative health sources (WHO, CDC, AHA, NIH,
+ *    MedlinePlus, Mayo Clinic, NHS, Cleveland Clinic...) found via a
+ *    domain-biased DuckDuckGo Lite search — merged and deduped, so health
+ *    answers are never PubMed-only.
  *  - Articles, general: DuckDuckGo Lite HTML endpoint (no key), parsed for
  *    title/URL/snippet; plain duckduckgo.com search link as fallback.
  *
@@ -283,10 +286,34 @@ export interface ArticleSearchResult {
   fallbackUrl: string | null;
   fallbackTitle: string | null;
   query: string;
-  source: 'pubmed' | 'duckduckgo' | 'fallback';
+  source: 'pubmed' | 'duckduckgo' | 'mixed' | 'fallback';
 }
 
 const MAX_ARTICLE_RESULTS = 5;
+const MAX_AUTHORITY_RESULTS = 3;
+
+// Authoritative health sources Mohsin explicitly expects for medical queries:
+// WHO, CDC, AHA, NIH (+ institutes), MedlinePlus, Mayo Clinic, NHS,
+// Cleveland Clinic, Harvard Health, Johns Hopkins.
+const AUTHORITY_DOMAINS = [
+  'who.int',
+  'cdc.gov',
+  'heart.org',
+  'nih.gov',
+  'medlineplus.gov',
+  'mayoclinic.org',
+  'nhs.uk',
+  'clevelandclinic.org',
+  'health.harvard.edu',
+  'hopkinsmedicine.org',
+];
+
+/** True when the domain is (or is a subdomain of) a known health authority. */
+export function isAuthorityDomain(domain: string): boolean {
+  const d = String(domain || '').toLowerCase().trim();
+  if (!d) return false;
+  return AUTHORITY_DOMAINS.some((a) => d === a || d.endsWith(`.${a}`));
+}
 
 // Heuristic: queries containing these go to PubMed (free official API) first.
 const MEDICAL_KEYWORDS = [
@@ -362,14 +389,14 @@ async function searchPubMed(query: string): Promise<ContentArticle[]> {
 }
 
 /** DuckDuckGo Lite HTML endpoint: parse result links + titles + snippets. */
-async function searchDuckDuckGo(query: string): Promise<ContentArticle[]> {
+async function searchDuckDuckGo(query: string, maxResults: number = MAX_ARTICLE_RESULTS): Promise<ContentArticle[]> {
   const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
   const html = await fetchText(url);
   const articles: ContentArticle[] = [];
   const seen = new Set<string>();
   const re = /<a rel="nofollow" href="\/\/duckduckgo\.com\/l\/\?uddg=([^"&']+)[^>]*class='result-link'>(.*?)<\/a>/gs;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null && articles.length < MAX_ARTICLE_RESULTS) {
+  while ((m = re.exec(html)) !== null && articles.length < maxResults) {
     let dest: string;
     try {
       dest = decodeURIComponent(m[1].replace(/&amp;/g, '&'));
@@ -401,9 +428,33 @@ async function searchDuckDuckGo(query: string): Promise<ContentArticle[]> {
 }
 
 /**
- * Search the web for articles about anything. Medical/health queries go to
- * PubMed first (then DuckDuckGo if PubMed has nothing); everything else goes
- * straight to DuckDuckGo. Never throws — worst case returns a search link.
+ * Authoritative health sources for medical queries: a DuckDuckGo Lite search
+ * biased toward WHO/CDC/AHA/NIH/Mayo/etc. via site: operators, then strictly
+ * filtered to authority domains only (in case the operator isn't honored).
+ * Returns real parsed results only — never fabricated URLs.
+ */
+async function searchAuthorityHealth(query: string): Promise<ContentArticle[]> {
+  const biased =
+    `${query} ` + AUTHORITY_DOMAINS.slice(0, 6).map((d) => `site:${d}`).join(' OR ');
+  const raw = await searchDuckDuckGo(biased, 10);
+  const articles: ContentArticle[] = [];
+  const seen = new Set<string>();
+  for (const a of raw) {
+    if (!isAuthorityDomain(a.domain)) continue;
+    if (seen.has(a.url)) continue;
+    seen.add(a.url);
+    articles.push(a);
+    if (articles.length >= MAX_AUTHORITY_RESULTS) break;
+  }
+  return articles;
+}
+
+/**
+ * Search the web for articles about anything. Medical/health queries get a
+ * MIX of PubMed (free official API) and authoritative health sources
+ * (WHO, CDC, AHA, NIH, Mayo Clinic, ...) merged and deduped — never
+ * PubMed-only. Everything else goes straight to DuckDuckGo. Never throws —
+ * worst case returns a search link.
  */
 export async function searchArticles(rawQuery: string): Promise<ArticleSearchResult> {
   const query = normalizeQuery(rawQuery);
@@ -419,10 +470,24 @@ export async function searchArticles(rawQuery: string): Promise<ArticleSearchRes
     let source: ArticleSearchResult['source'] = 'duckduckgo';
 
     if (isMedicalQuery(query)) {
-      articles = await searchPubMed(query).catch(() => [] as ContentArticle[]);
+      // Run both in parallel; merge PubMed + authority results, dedupe by URL.
+      const [pubmed, authority] = await Promise.all([
+        searchPubMed(query).catch(() => [] as ContentArticle[]),
+        searchAuthorityHealth(query).catch(() => [] as ContentArticle[]),
+      ]);
+      const seen = new Set<string>();
+      for (const a of [...pubmed.slice(0, 3), ...authority]) {
+        if (seen.has(a.url)) continue;
+        seen.add(a.url);
+        articles.push(a);
+        if (articles.length >= MAX_ARTICLE_RESULTS) break;
+      }
       if (articles.length > 0) {
-        source = 'pubmed';
+        source = pubmed.length > 0 && authority.length > 0 ? 'mixed'
+          : pubmed.length > 0 ? 'pubmed'
+          : 'duckduckgo';
       } else {
+        // Both empty: one unbiased general pass before giving up.
         articles = await searchDuckDuckGo(query).catch(() => [] as ContentArticle[]);
       }
     } else {
