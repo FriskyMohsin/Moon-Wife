@@ -834,7 +834,8 @@ BROWSER CONTROL: You can control the user's private server-side web browser with
     // Pari AI: universal content search. Videos for anything the user wants
     // to SEE how to do (exercises, DIY, repairs); articles for anything they
     // want to READ more about (medical queries return a mix of PubMed plus
-    // authoritative sources like WHO/CDC/AHA/NIH/Mayo). Only ever share links
+    // authoritative sources like WHO/CDC/AHA/NIH/Mayo; engineering/CS/physics
+    // queries return arXiv + Semantic Scholar papers). Only ever share links
     // the tools returned — never invent URLs.
     const CONTENT_SEARCH_PROMPT = `
 
@@ -954,7 +955,7 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
       {
         name: 'search_articles',
         description:
-          'Search the web for real articles (medical queries use PubMed). Call when the user wants to read more about something or asks for an article/study.',
+          'Search the web for real articles. Medical queries use PubMed + WHO/CDC/AHA/NIH; engineering/CS/physics queries use arXiv + Semantic Scholar. Call when the user wants to read more about something or asks for an article/study.',
         parameters: {
           type: 'OBJECT',
           properties: {

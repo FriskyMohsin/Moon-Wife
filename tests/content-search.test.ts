@@ -11,6 +11,8 @@ import {
   buildArticleSearchUrl,
   thumbnailUrlFor,
   isMedicalQuery,
+  isTechnicalQuery,
+  isResearchIntent,
   isAuthorityDomain,
   searchVideos,
   searchArticles,
@@ -40,6 +42,22 @@ async function main() {
   assert.equal(isMedicalQuery('vitamin D deficiency treatment'), true);
   assert.equal(isMedicalQuery('how to fix a leaking tap'), false);
   assert.equal(isMedicalQuery('best budget phones 2026'), false);
+
+  // --- Unit: technical + research-intent routing heuristics ---
+  assert.equal(isTechnicalQuery('transformer neural network attention paper'), true);
+  assert.equal(isTechnicalQuery('quantum computing error correction'), true);
+  assert.equal(isTechnicalQuery('thermodynamics rankine cycle efficiency'), true);
+  assert.equal(isTechnicalQuery('how to fix a leaking tap'), false);
+  assert.equal(isTechnicalQuery('best budget phones 2026'), false);
+  assert.equal(isTechnicalQuery('vitamin D deficiency treatment'), false);
+  // word boundaries: 'math' must not match 'aftermath', 'api' not 'rapid'
+  assert.equal(isTechnicalQuery('aftermath of the flood'), false);
+  assert.equal(isTechnicalQuery('rapid weight loss tips'), false);
+  assert.equal(isResearchIntent('quantum computing error correction survey'), true);
+  assert.equal(isResearchIntent('sleep and memory consolidation study'), true);
+  assert.equal(isResearchIntent('phd thesis on solar cells'), true);
+  assert.equal(isResearchIntent('how to fix a leaking tap'), false);
+  assert.equal(isResearchIntent('best budget phones 2026'), false);
 
   // --- Unit: authority domain detection ---
   assert.equal(isAuthorityDomain('who.int'), true);
@@ -129,6 +147,49 @@ async function main() {
     assert.ok(a.domain.length > 0);
   }
   console.log('ddg proof:', web.articles[0].url, '|', web.articles[0].title.slice(0, 60));
+
+  // --- Integration: technical query -> real arXiv paper links ---
+  clearContentSearchCache();
+  let tech = await searchArticles('transformer neural network attention paper');
+  for (let attempt = 1; attempt < 3 && tech.fallback; attempt++) {
+    await new Promise((r) => setTimeout(r, 10000));
+    clearContentSearchCache();
+    tech = await searchArticles('transformer neural network attention paper');
+  }
+  assert.equal(tech.fallback, false, 'expected real articles, got fallback');
+  const ARXIV_RE = /^https:\/\/arxiv\.org\/abs\/\d{4}\.\d{4,5}$/;
+  const hasArxiv = tech.articles.some(
+    (a) => a.source === 'arxiv' && ARXIV_RE.test(a.url) && a.domain === 'arxiv.org'
+  );
+  assert.ok(hasArxiv, 'expected at least one real arxiv.org/abs/ paper link');
+  assert.ok(['arxiv', 'semanticscholar', 'mixed', 'duckduckgo'].includes(tech.source), `unexpected source ${tech.source}`);
+  for (const a of tech.articles) {
+    assert.ok(/^https?:\/\//.test(a.url), `bad article URL: ${a.url}`);
+    assert.ok(a.title.length > 0);
+    assert.ok(a.domain.length > 0);
+  }
+  const techUrls = tech.articles.map((a) => a.url);
+  assert.equal(new Set(techUrls).size, techUrls.length, 'duplicate URLs in technical mix');
+  console.log('arxiv proof:', tech.source);
+  for (const a of tech.articles) console.log('  -', a.domain, '->', a.url, '|', a.title.slice(0, 55));
+
+  // --- Integration: research-intent query -> never throws, honest results ---
+  // (Semantic Scholar may 429 in this sandbox; the code must degrade to DDG
+  // or an honest search link — never throw, never fabricate.)
+  clearContentSearchCache();
+  await new Promise((r) => setTimeout(r, 5000));
+  const res = await searchArticles('sleep and memory consolidation study');
+  if (res.fallback) {
+    assert.ok(res.fallbackUrl?.startsWith('https://duckduckgo.com/?q='), 'fallback must be an honest search link');
+    console.log('research-intent proof: honest fallback ->', res.fallbackUrl);
+  } else {
+    assert.ok(res.articles.length >= 1);
+    for (const a of res.articles) {
+      assert.ok(/^https?:\/\//.test(a.url), `bad article URL: ${a.url}`);
+      assert.ok(!a.url.includes('duckduckgo.com/l/'), 'must be the real destination, not a DDG wrapper');
+    }
+    console.log('research-intent proof:', res.source, '->', res.articles[0].url);
+  }
 
   console.log('\nAll content-search tests passed.');
 }

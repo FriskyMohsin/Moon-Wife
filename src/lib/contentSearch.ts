@@ -13,6 +13,11 @@
  *    MedlinePlus, Mayo Clinic, NHS, Cleveland Clinic...) found via a
  *    domain-biased DuckDuckGo Lite search — merged and deduped, so health
  *    answers are never PubMed-only.
+ *  - Articles, engineering/CS/physics/math: arXiv API (free official API, no
+ *    key) plus Semantic Scholar Graph API (free, no key, rate-limited) —
+ *    real research-paper links, merged and deduped.
+ *  - Articles, research/academic intent ("paper", "study", "thesis",
+ *    "journal"...): Semantic Scholar (free, no key).
  *  - Articles, general: DuckDuckGo Lite HTML endpoint (no key), parsed for
  *    title/URL/snippet; plain duckduckgo.com search link as fallback.
  *
@@ -275,8 +280,9 @@ export interface ContentArticle {
   url: string;
   domain: string;
   snippet: string;
-  /** 'pubmed' for medical sources, 'web' for general results. */
-  source: 'pubmed' | 'web';
+  /** Which source produced this article: pubmed (medical), arxiv or
+   *  semanticscholar (academic), web (general DDG results). */
+  source: 'pubmed' | 'web' | 'arxiv' | 'semanticscholar';
 }
 
 export interface ArticleSearchResult {
@@ -286,7 +292,7 @@ export interface ArticleSearchResult {
   fallbackUrl: string | null;
   fallbackTitle: string | null;
   query: string;
-  source: 'pubmed' | 'duckduckgo' | 'mixed' | 'fallback';
+  source: 'pubmed' | 'duckduckgo' | 'arxiv' | 'semanticscholar' | 'mixed' | 'fallback';
 }
 
 const MAX_ARTICLE_RESULTS = 5;
@@ -449,12 +455,195 @@ async function searchAuthorityHealth(query: string): Promise<ContentArticle[]> {
   return articles;
 }
 
+// ---------------------------------------------------------------------------
+// Academic sources: arXiv + Semantic Scholar (free, no keys)
+// ---------------------------------------------------------------------------
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Field routing: queries with these signals go to arXiv (+ Semantic Scholar). */
+const TECHNICAL_KEYWORDS = [
+  'algorithm', 'algorithms', 'neural network', 'neural networks', 'machine learning',
+  'deep learning', 'transformer', 'transformers', 'attention mechanism', 'llm',
+  'quantum', 'quantum computing', 'qubit', 'superconduct', 'semiconductor',
+  'microchip', 'vlsi', 'circuit', 'circuits', 'robotics', 'robot', 'control theory',
+  'signal processing', 'thermodynamics', 'fluid dynamics', 'electromagnetic',
+  'electromagnetism', 'astrophysics', 'particle physics', 'relativity',
+  'black hole', 'cosmology', 'string theory', 'engineering', 'aerospace',
+  'mechanical', 'civil engineering', 'cryptography', 'blockchain', 'compiler',
+  'operating system', 'distributed systems', 'database', 'computer vision',
+  'natural language processing', 'nlp', 'reinforcement learning', 'generative ai',
+  'artificial intelligence', 'ai model', 'optimization', 'graph theory',
+  'topology', 'differential equation', 'linear algebra', 'calculus', 'mathematics',
+  'physics', 'computer science', 'software architecture', 'kernel', 'embedded',
+  'nanotechnology', 'photonics', 'laser', 'plasma physics', 'nuclear',
+];
+
+/** Research/academic intent: "paper", "study", "thesis", ... */
+const RESEARCH_INTENT_KEYWORDS = [
+  'research', 'paper', 'papers', 'study', 'studies', 'thesis', 'dissertation',
+  'journal', 'journals', 'survey', 'survey paper', 'literature review', 'publication',
+  'academic', 'scholar', 'arxiv', 'peer reviewed', 'peer-review', 'experiment',
+  'findings', 'meta analysis', 'meta-analysis', 'whitepaper', 'preprint',
+];
+
+function keywordRegex(words: string[]): RegExp {
+  return new RegExp(`\\b(${words.map(escapeRegExp).join('|')})\\b`, 'i');
+}
+
+const TECHNICAL_RE = keywordRegex(TECHNICAL_KEYWORDS);
+const RESEARCH_INTENT_RE = keywordRegex(RESEARCH_INTENT_KEYWORDS);
+
+/** True for CS/engineering/physics/math-flavored queries. */
+export function isTechnicalQuery(query: string): boolean {
+  return TECHNICAL_RE.test(normalizeQuery(query));
+}
+
+/** True when the user is looking for research papers/studies. */
+export function isResearchIntent(query: string): boolean {
+  return RESEARCH_INTENT_RE.test(normalizeQuery(query));
+}
+
+/** Decode XML/HTML entities (arXiv titles/authors carry these). */
+function decodeEntities(text: string): string {
+  return String(text || '')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => {
+      try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; }
+    })
+    .replace(/&#(\d+);/g, (_, d) => {
+      try { return String.fromCodePoint(parseInt(d, 10)); } catch { return ''; }
+    })
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Respect provider rate guidance: arXiv asks ≤1 request / 3s; Semantic Scholar
+// is fine around ~1 req/sec unauthenticated. The 24h cache covers repeats.
+async function throttle(lastRef: { t: number }, minGapMs: number): Promise<void> {
+  const wait = minGapMs - (Date.now() - lastRef.t);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+const arxivClock = { t: 0 };
+const s2Clock = { t: 0 };
+
+const MAX_ACADEMIC_RESULTS = 3;
+
 /**
- * Search the web for articles about anything. Medical/health queries get a
- * MIX of PubMed (free official API) and authoritative health sources
- * (WHO, CDC, AHA, NIH, Mayo Clinic, ...) merged and deduped — never
- * PubMed-only. Everything else goes straight to DuckDuckGo. Never throws —
- * worst case returns a search link.
+ * arXiv API (free official, no key): Atom XML -> title + canonical abs link.
+ * Only URLs actually returned by arXiv are used; the version suffix (v2) is
+ * stripped for the canonical link.
+ */
+async function searchArxiv(query: string): Promise<ContentArticle[]> {
+  await throttle(arxivClock, 3000);
+  arxivClock.t = Date.now();
+  const url =
+    `https://export.arxiv.org/api/query` +
+    `?search_query=all:${encodeURIComponent(query)}&start=0&max_results=${MAX_ACADEMIC_RESULTS}` +
+    `&sortBy=relevance&sortOrder=descending`;
+  const xml = await fetchText(url, 1024 * 1024);
+  const articles: ContentArticle[] = [];
+  const seen = new Set<string>();
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let em: RegExpExecArray | null;
+  while ((em = entryRe.exec(xml)) !== null && articles.length < MAX_ACADEMIC_RESULTS) {
+    const entry = em[1];
+    const idm = entry.match(/<id>\s*https?:\/\/arxiv\.org\/abs\/([^\s<]+)\s*<\/id>/);
+    if (!idm) continue;
+    const baseId = idm[1].replace(/v\d+$/, ''); // canonical link, version stripped
+    const link = `https://arxiv.org/abs/${baseId}`;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    const tm = entry.match(/<title[^>]*>([\s\S]*?)<\/title>/);
+    const title = decodeEntities(tm ? tm[1] : '').slice(0, 160) || 'Untitled arXiv paper';
+    const authors = [...entry.matchAll(/<name>([\s\S]*?)<\/name>/g)]
+      .map((a) => decodeEntities(a[1]))
+      .filter(Boolean);
+    const pm = entry.match(/<published>(\d{4}-\d{2}-\d{2})/);
+    const who = authors.length > 0
+      ? `${authors.slice(0, 2).join(', ')}${authors.length > 2 ? ' et al.' : ''}`
+      : '';
+    const when = pm ? pm[1].slice(0, 4) : '';
+    const snippet = [who, when].filter(Boolean).join(' · ').slice(0, 160);
+    articles.push({ title, url: link, domain: 'arxiv.org', snippet, source: 'arxiv' });
+  }
+  return articles;
+}
+
+/**
+ * Semantic Scholar Graph API (free, no key at low rate). 429 (rate-limited)
+ * throws here and is swallowed by the caller -> falls back to the other
+ * sources; never surfaces to the user.
+ */
+async function searchSemanticScholar(query: string): Promise<ContentArticle[]> {
+  await throttle(s2Clock, 1100);
+  s2Clock.t = Date.now();
+  const url =
+    `https://api.semanticscholar.org/graph/v1/paper/search` +
+    `?query=${encodeURIComponent(query)}&limit=${MAX_ACADEMIC_RESULTS}` +
+    `&fields=title,url,abstract,venue,year,paperId`;
+  const body = await fetchText(url, 512 * 1024); // rejects on non-200 incl. 429
+  const json = JSON.parse(body);
+  const papers: any[] = json?.data || [];
+  const articles: ContentArticle[] = [];
+  const seen = new Set<string>();
+  for (const p of papers) {
+    if (!p?.title) continue;
+    // Prefer the publisher URL from the API; otherwise the canonical S2 page
+    // derived from the API's own paperId (documented link pattern).
+    const link =
+      (typeof p.url === 'string' && /^https?:\/\//.test(p.url) && p.url) ||
+      (typeof p.paperId === 'string' && p.paperId.length > 0
+        ? `https://www.semanticscholar.org/paper/${p.paperId}`
+        : '');
+    if (!link || seen.has(link)) continue;
+    seen.add(link);
+    const meta = [p.venue, p.year].filter(Boolean).join(' · ');
+    const snippet = (typeof p.abstract === 'string' && p.abstract.trim()
+      ? p.abstract.trim().slice(0, 200)
+      : meta).slice(0, 200);
+    articles.push({
+      title: String(p.title).trim().slice(0, 160),
+      url: link,
+      domain: domainOf(link),
+      snippet,
+      source: 'semanticscholar',
+    });
+    if (articles.length >= MAX_ACADEMIC_RESULTS) break;
+  }
+  return articles;
+}
+
+/** Merge academic lists, dedupe by URL, cap the total. */
+function mergeArticles(lists: ContentArticle[][], cap: number): ContentArticle[] {
+  const out: ContentArticle[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const a of list) {
+      if (seen.has(a.url)) continue;
+      seen.add(a.url);
+      out.push(a);
+      if (out.length >= cap) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * Search the web for articles about anything. Field-routed, all free/keyless:
+ *  - Medical/health -> PubMed (official API) + authoritative health sources
+ *    (WHO, CDC, AHA, NIH, Mayo, ...) merged and deduped — never PubMed-only.
+ *  - Engineering/CS/physics/math -> arXiv + Semantic Scholar merged.
+ *  - Research/academic intent ("paper", "study", "thesis") -> Semantic Scholar.
+ *  - Everything else -> DuckDuckGo.
+ * Never throws — worst case returns a search link. Never fabricates URLs.
  */
 export async function searchArticles(rawQuery: string): Promise<ArticleSearchResult> {
   const query = normalizeQuery(rawQuery);
@@ -475,19 +664,37 @@ export async function searchArticles(rawQuery: string): Promise<ArticleSearchRes
         searchPubMed(query).catch(() => [] as ContentArticle[]),
         searchAuthorityHealth(query).catch(() => [] as ContentArticle[]),
       ]);
-      const seen = new Set<string>();
-      for (const a of [...pubmed.slice(0, 3), ...authority]) {
-        if (seen.has(a.url)) continue;
-        seen.add(a.url);
-        articles.push(a);
-        if (articles.length >= MAX_ARTICLE_RESULTS) break;
-      }
+      articles = mergeArticles([pubmed.slice(0, 3), authority], MAX_ARTICLE_RESULTS);
       if (articles.length > 0) {
         source = pubmed.length > 0 && authority.length > 0 ? 'mixed'
           : pubmed.length > 0 ? 'pubmed'
           : 'duckduckgo';
       } else {
         // Both empty: one unbiased general pass before giving up.
+        articles = await searchDuckDuckGo(query).catch(() => [] as ContentArticle[]);
+      }
+    } else if (isTechnicalQuery(query)) {
+      // arXiv primary, Semantic Scholar as backup; merged and deduped.
+      const [arxiv, s2] = await Promise.all([
+        searchArxiv(query).catch(() => [] as ContentArticle[]),
+        searchSemanticScholar(query).catch(() => [] as ContentArticle[]),
+      ]);
+      articles = mergeArticles([arxiv, s2], MAX_ARTICLE_RESULTS);
+      if (articles.length > 0) {
+        source = arxiv.length > 0 && s2.length > 0 ? 'mixed'
+          : arxiv.length > 0 ? 'arxiv'
+          : 'semanticscholar';
+      } else {
+        // Academic sources empty: one unbiased general pass before giving up.
+        articles = await searchDuckDuckGo(query).catch(() => [] as ContentArticle[]);
+      }
+    } else if (isResearchIntent(query)) {
+      const s2 = await searchSemanticScholar(query).catch(() => [] as ContentArticle[]);
+      articles = mergeArticles([s2], MAX_ARTICLE_RESULTS);
+      if (articles.length > 0) {
+        source = 'semanticscholar';
+      } else {
+        // S2 empty/rate-limited: one unbiased general pass before giving up.
         articles = await searchDuckDuckGo(query).catch(() => [] as ContentArticle[]);
       }
     } else {
