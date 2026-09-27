@@ -7,6 +7,8 @@ import {
   authenticateUser,
   validateSessionToken,
   createSessionToken,
+  createGuestUser,
+  revokeSessionToken,
   getUserById,
   getUserByEmail,
   getCompanionProfile,
@@ -373,6 +375,58 @@ export function registerHoorviaRoutes(app: Express) {
       companion,
       isOwner: true,
     });
+  });
+
+  // --- ISOLATED GUEST ENTRY POINT ("Continue as Guest") ---
+  // Mints a server-authorized, anonymous `role: 'user'` guest identity.
+  // The guest id is `guest_<random>` and can never equal 'usr_mohsin_owner';
+  // guests receive no owner memory, conversations, tasks, admin, or runner
+  // access (all enforced by existing owner guards + capability checks).
+  app.post('/api/hoorvia/auth/guest', (req: Request, res: Response) => {
+    try {
+      const guest = createGuestUser();
+      const token = createSessionToken(guest);
+      const companion = getCompanionProfile(guest.id) ||
+        saveCompanionProfile(guest.id, {
+          name: 'Aria',
+          type: 'girlfriend',
+          gender: 'female',
+          voice: 'Aoede',
+          language: 'English',
+          personality: 'Warm, polite, and helpful assistant for guests.',
+          communicationStyle: 'Friendly, respectful, and concise.',
+          tone: 'Friendly',
+        });
+
+      res.json({
+        status: 'ok',
+        token,
+        user: {
+          id: guest.id,
+          email: guest.email,
+          name: guest.name,
+          role: guest.role,
+          isGuest: true,
+        },
+        companion,
+        isOwner: false,
+        isGuest: true,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Guest entry failed. Please try again.' });
+    }
+  });
+
+  // --- SIGN OUT (server-side session revoke) ---
+  // Revokes the CALLER's session token so it can never validate again.
+  // The client must also clear local auth state and return to PUBLIC.
+  app.post('/api/hoorvia/auth/logout', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const authHeader = req.headers.authorization;
+    const token =
+      (req.headers['x-hoorvia-token'] as string) ||
+      (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '');
+    revokeSessionToken(token || '');
+    res.json({ status: 'ok', signedOut: true });
   });
 
   app.post('/api/hoorvia/auth/google-login', async (req: Request, res: Response) => {

@@ -441,6 +441,7 @@ export async function executeTaskNow(
   const runs = getAllTaskRuns();
   runs.unshift(initialRun);
   saveJson(RUNS_FILE, runs);
+  console.log(`[TASK_RUN] task_id=${task.task_id} run_id=${runId} state=RUNNING`);
 
   // 2. REAL execution through the executor pipeline (never simulated)
   const executor = opts.executor || getTaskToolExecutor();
@@ -502,6 +503,11 @@ export async function executeTaskNow(
   }
 
   saveJson(TASKS_FILE, tasks);
+  console.log(
+    `[TASK_RUN] task_id=${task.task_id} run_id=${runId} state=${finalStatus}` +
+    ` output_path=${real.output?.output_path || 'null'}` +
+    (executionSuccess ? '' : ` error=${errorMessage || 'unknown'}`)
+  );
 
   // Owner notification fan-out (Telegram): COMPLETED / FAILED / BLOCKED.
   try {

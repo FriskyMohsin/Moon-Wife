@@ -141,6 +141,7 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
   const [apiKey, setApiKey] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isGuestSubmitting, setIsGuestSubmitting] = useState<boolean>(false);
 
   const companionTypes: {
     type: CompanionType;
@@ -341,6 +342,26 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
     }
   };
 
+  // Isolated Guest entry: server mints an anonymous role:'user' guest
+  // identity (never the owner). No owner data, admin, or runner access.
+  const handleContinueAsGuest = async () => {
+    if (isGuestSubmitting) return;
+    setErrorMessage(null);
+    setIsGuestSubmitting(true);
+    try {
+      const res = await fetch('/api/hoorvia/auth/guest', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.error || !data.token) {
+        throw new Error(data.error || 'Guest entry failed. Please try again.');
+      }
+      onLoginSuccess({ token: data.token, user: data.user, companion: data.companion });
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Guest entry failed. Please try again.');
+    } finally {
+      setIsGuestSubmitting(false);
+    }
+  };
+
   const handleOwnerLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setOwnerError(null);
@@ -429,6 +450,16 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
           >
             <Lock className="w-3.5 h-3.5 text-rose-400" />
             Owner Portal
+          </button>
+
+          <button
+            onClick={handleContinueAsGuest}
+            disabled={isGuestSubmitting}
+            className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-white disabled:opacity-60 text-slate-900 transition-all flex items-center gap-1.5"
+            title="Enter as an isolated guest (no account needed)"
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            {isGuestSubmitting ? 'Opening Guest…' : 'Continue as Guest'}
           </button>
         </div>
       </header>

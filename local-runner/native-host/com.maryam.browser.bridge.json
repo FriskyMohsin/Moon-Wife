@@ -1,7 +1,7 @@
 {
   "name": "com.maryam.browser.bridge",
   "description": "Maryam Chrome Automation Companion Native Messaging Host",
-  "path": "native_host.bat",
+  "path": "C:\\Users\\HP\\Desktop\\MARYAM_MERGED_CANDIDATE\\local-runner\\native-host\\native_host.bat",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://ooalidlihcoemfijgdagllfkpbnhegjd/"

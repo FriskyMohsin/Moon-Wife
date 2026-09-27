@@ -62,24 +62,13 @@ import {
   ensureOwnerSession,
   storeOwnerSession,
   clearOwnerSession,
-  getStoredOwnerUser,
 } from './lib/ownerAuth';
 
 export default function App() {
-  // Public Multi-User Companion Platform State
-  const [platformMode, setPlatformMode] = useState<'hoorvia' | 'mohsin_maryam'>(() => {
-    const saved = localStorage.getItem('hoorvia_platform_mode');
-    const userStr = localStorage.getItem('hoorvia_user_data');
-    if (saved === 'mohsin_maryam' && userStr) {
-      try {
-        const u = JSON.parse(userStr);
-        if (u && u.role === 'owner' && u.id === 'usr_mohsin_owner') {
-          return 'mohsin_maryam';
-        }
-      } catch {}
-    }
-    return 'hoorvia';
-  });
+  // Public Multi-User Companion Platform State.
+  // ALWAYS starts PUBLIC. Only a server-validated owner session (established
+  // by an explicit owner login and revalidated on boot) may elevate to owner.
+  const [platformMode, setPlatformMode] = useState<'hoorvia' | 'mohsin_maryam'>('hoorvia');
   const [hoorviaToken, setHoorviaToken] = useState<string | null>(() => {
     // Never treat a stale legacy value (e.g. a user id) as a session token.
     return getOwnerToken();
@@ -483,17 +472,17 @@ export default function App() {
           delete liveAuthFailedRef.current[currentConnId];
 
           if (authFailed) {
-            // Owner session is missing/expired/invalid: repair via the existing
-            // legitimate re-auth flow, then reconnect ONCE with the fresh token.
-            // Bounded to 2 repairs so a persistent server-side refusal never
-            // becomes an infinite reconnect loop.
+            // Owner session is missing/expired/invalid/revoked: FAIL CLOSED
+            // to PUBLIC. Never mint a session silently — only an explicit
+            // owner login may create one. Bounded to 2 attempts so a
+            // persistent server-side refusal never becomes a reconnect loop.
             if (liveRepairAttemptsRef.current < 2) {
               liveRepairAttemptsRef.current += 1;
-              console.log(`[${connectionLabel}] [AUTH_REPAIR] Refreshing owner session (attempt ${liveRepairAttemptsRef.current}/2)...`);
+              console.log(`[${connectionLabel}] [AUTH_REPAIR] Revalidating stored owner session (attempt ${liveRepairAttemptsRef.current}/2)...`);
               reconnectTimeoutRef.current = setTimeout(async () => {
                 if (!isComponentMountedRef.current) return;
                 try {
-                  const repaired = await ensureOwnerSession(true);
+                  const repaired = await ensureOwnerSession();
                   if (repaired) {
                     setHoorviaToken(repaired.token);
                     if (repaired.user) {
@@ -504,12 +493,17 @@ export default function App() {
                       }
                     }
                     if (repaired.companion) setHoorviaCompanion(repaired.companion);
-                    console.log(`[${connectionLabel}] [AUTH_REPAIR_OK] Reconnecting with fresh session`);
+                    console.log(`[${connectionLabel}] [AUTH_REPAIR_OK] Reconnecting with validated session`);
                     if (isComponentMountedRef.current && (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED)) {
                       connectLiveSession();
                     }
                   } else {
-                    console.warn(`[${connectionLabel}] [AUTH_REPAIR_FAILED] Owner re-auth did not return a session`);
+                    console.warn(`[${connectionLabel}] [AUTH_REPAIR_FAILED] No valid owner session; staying public`);
+                    setHoorviaToken(null);
+                    setHoorviaUser(null);
+                    setHoorviaCompanion(null);
+                    setPlatformMode('hoorvia');
+                    try { localStorage.removeItem('hoorvia_platform_mode'); } catch {}
                   }
                 } catch (repairErr) {
                   console.warn(`[${connectionLabel}] [AUTH_REPAIR_ERROR]`, repairErr);
@@ -557,12 +551,13 @@ export default function App() {
       });
 
     const initOwnerAuthAndSync = async () => {
-      // Canonical owner session bootstrap: validate any stored token, purge
-      // stale/invalid legacy values, and repair via the existing legitimate
-      // owner re-auth flow. A page refresh must never break authorization.
+      // Canonical owner session bootstrap: validate any STORED token only.
+      // A missing/invalid/expired token fails closed to PUBLIC — the app
+      // NEVER mints an owner session silently. Only an explicit owner login
+      // creates a session. A page refresh must never elevate a visitor.
       let token: string | null = null;
       try {
-        const session = await ensureOwnerSession(false);
+        const session = await ensureOwnerSession();
         if (session) {
           token = session.token;
           setHoorviaToken(session.token);
@@ -575,8 +570,14 @@ export default function App() {
           }
           if (session.companion) setHoorviaCompanion(session.companion);
         } else {
-          const cachedUser = getStoredOwnerUser();
-          if (cachedUser) setHoorviaUser(cachedUser);
+          // No valid owner session: stay PUBLIC. Purge any residual owner
+          // UI state so nothing private renders for a visitor.
+          clearOwnerSession();
+          setHoorviaToken(null);
+          setHoorviaUser(null);
+          setHoorviaCompanion(null);
+          setPlatformMode('hoorvia');
+          try { localStorage.removeItem('hoorvia_platform_mode'); } catch {}
         }
       } catch (e) {
         console.warn('Owner auth bootstrap notice:', e);
@@ -584,19 +585,24 @@ export default function App() {
 
       const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}`, 'x-hoorvia-token': token } : {};
 
-      // Ensure memory survives app reloads / restarts by syncing with server disk storage
-      fetch('/api/memory', { headers })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data && data.memory && typeof data.memory === 'object') {
-            setMemory((prev) => {
-              const merged = mergeMemoryBanks(prev, data.memory);
-              saveMemoryBank(merged);
-              return merged;
-            });
-          }
-        })
-        .catch((err) => console.warn('Memory disk sync notice:', err));
+      // Ensure memory survives app reloads / restarts by syncing with server disk storage.
+      // SECURITY: the server memory bank is Mohsin's private owner data. Only a
+      // validated owner session may fetch it, so guest/public visitors never
+      // request or hydrate owner memory.
+      if (token) {
+        fetch('/api/memory', { headers })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data && data.memory && typeof data.memory === 'object') {
+              setMemory((prev) => {
+                const merged = mergeMemoryBanks(prev, data.memory);
+                saveMemoryBank(merged);
+                return merged;
+              });
+            }
+          })
+          .catch((err) => console.warn('Memory disk sync notice:', err));
+      }
 
       // Server is authoritative for owner conversational continuity; localStorage is display cache only.
       fetch('/api/owner/conversation', { headers })
@@ -1493,6 +1499,17 @@ export default function App() {
   };
 
   const handleHoorviaLogout = () => {
+    const token = getOwnerToken();
+    if (token) {
+      // Best-effort server revoke; local state is cleared regardless.
+      fetch('/api/hoorvia/auth/logout', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-hoorvia-token': token,
+        },
+      }).catch(() => {});
+    }
     setHoorviaToken(null);
     setHoorviaUser(null);
     setHoorviaCompanion(null);
@@ -1502,6 +1519,52 @@ export default function App() {
       localStorage.removeItem('hoorvia_platform_mode');
     } catch {}
   };
+
+  // Owner Sign Out: revoke the CURRENT session server-side, then clear all
+  // client auth + owner UI state and return to PUBLIC. Never auto-logins.
+  const handleOwnerSignOut = useCallback(async () => {
+    const token = getOwnerToken();
+    if (token) {
+      try {
+        await fetch('/api/hoorvia/auth/logout', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-hoorvia-token': token,
+          },
+        });
+      } catch {
+        // Server revoke is best-effort; local state is still cleared so the
+        // browser can never keep rendering owner UI after Sign Out.
+      }
+    }
+    try {
+      if (wsRef.current) {
+        wsRef.current.close(1000, 'Owner signed out');
+        wsRef.current = null;
+      }
+    } catch {}
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    liveRepairAttemptsRef.current = 2;
+    setHoorviaToken(null);
+    setHoorviaUser(null);
+    setHoorviaCompanion(null);
+    setShowOwnerAdmin(false);
+    setIsGuestMode(false);
+    setMessages([]);
+    try {
+      saveRecentConversation([]);
+    } catch {}
+    clearOwnerSession();
+    setPlatformMode('hoorvia');
+    try {
+      localStorage.removeItem('hoorvia_companion_data');
+      localStorage.removeItem('hoorvia_platform_mode');
+    } catch {}
+  }, []);
 
   // Verify securely authenticated owner identity
   const isVerifiedOwner = Boolean(
@@ -1670,6 +1733,7 @@ export default function App() {
         onOpenToolRunner={() => setIsToolRunnerOpen(true)}
         onOpenSocial={() => setIsSocialOpen(true)}
         onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
+        onSignOut={handleOwnerSignOut}
         messages={messages}
         isThinking={isThinking}
         voiceState={voiceState}

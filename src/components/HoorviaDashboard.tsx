@@ -693,7 +693,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 {user.name?.[0] || 'U'}
               </div>
               <div className="truncate">
-                <p className="font-semibold text-white truncate">{user.name}</p>
+                <p className="font-semibold text-white truncate">
+                  {user.name}
+                  {user.isGuest && (
+                    <span className="ml-1.5 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 align-middle">
+                      Guest
+                    </span>
+                  )}
+                </p>
                 <p className="text-[10px] text-slate-400 truncate">{user.email}</p>
               </div>
             </div>

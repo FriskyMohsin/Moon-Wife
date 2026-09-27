@@ -3,17 +3,17 @@
  *
  * CANONICAL client-side owner auth/session provider for Maryam.
  *
- * There must be exactly ONE owner-auth lifecycle in the browser:
- *   login -> server creates authoritative session (token_...)
+ * There is exactly ONE owner-auth lifecycle in the browser:
+ *   explicit owner login -> server creates authoritative session (token_...)
  *        -> client stores REAL session token
  *        -> every private request + every WebSocket (re)connect uses it
- *        -> stale/invalid tokens are detected and repaired via the
- *           existing legitimate owner re-auth flow (never by manual
- *           localStorage edits, never by treating a user id as a token).
+ *        -> sign-out or invalid tokens return the browser to PUBLIC state
  *
  * Rules enforced here:
  *  - NEVER treat a user id (e.g. 'usr_mohsin_owner') as a session token.
- *  - Detect legacy/invalid values and force re-auth instead of sending them.
+ *  - NEVER mint an owner session silently: a missing/invalid/expired token
+ *    fails closed to PUBLIC. Only an explicit owner login creates a session.
+ *  - NO embedded owner credential exists in this module or the public bundle.
  *  - Token values are never written to logs/reports from this module.
  */
 
@@ -23,10 +23,6 @@ export const OWNER_COMPANION_KEY = 'hoorvia_companion_data';
 export const OWNER_PLATFORM_MODE_KEY = 'hoorvia_platform_mode';
 
 export const OWNER_USER_ID = 'usr_mohsin_owner';
-
-// Existing legitimate local owner re-auth credential used by the app's
-// first-boot auto-login flow. Kept in exactly one place. Never logged.
-const OWNER_AUTO_LOGIN_PASSKEY = 'MohsinOwnerKey2026!';
 
 export interface OwnerSession {
   token: string;
@@ -40,8 +36,9 @@ export function isStaleOwnerTokenValue(value: string | null | undefined): boolea
   const v = value.trim();
   if (v.length === 0) return true;
   if (v === OWNER_USER_ID) return true;
-  if (v === 'owner_secret_dev_session') return true;
-  if (v === OWNER_AUTO_LOGIN_PASSKEY) return true;
+  // Reject legacy placeholder-shaped values without embedding a historical
+  // credential-like literal in the public bundle.
+  if (/^owner_[a-z0-9_]*session$/i.test(v)) return true;
   if (v === 'undefined' || v === 'null') return true;
   // Real server-issued session tokens look like token_<48 hex chars>.
   if (v.length < 20) return true;
@@ -129,47 +126,28 @@ async function validateTokenWithServer(token: string): Promise<{ user: any; comp
   }
 }
 
-async function performOwnerReAuth(): Promise<OwnerSession | null> {
-  try {
-    const res = await fetch('/api/hoorvia/auth/owner-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passkey: OWNER_AUTO_LOGIN_PASSKEY }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || !data.token || isStaleOwnerTokenValue(data.token)) return null;
-    const session: OwnerSession = { token: data.token, user: data.user, companion: data.companion };
-    storeOwnerSession(session);
-    return session;
-  } catch {
+/**
+ * Validate the stored owner session against the server WITHOUT minting.
+ * - Returns the working session when the stored token validates.
+ * - Purges missing/stale/invalid/expired tokens and returns null.
+ * - NEVER creates a session: a null result means PUBLIC state. Only an
+ *   explicit owner login (owner portal modal) may create a session.
+ */
+export async function ensureOwnerSession(): Promise<OwnerSession | null> {
+  const existing = getOwnerToken();
+  if (existing) {
+    const validated = await validateTokenWithServer(existing);
+    if (validated) {
+      return { token: existing, user: validated.user, companion: validated.companion };
+    }
+    // Stored token is dead (expired / revoked / unknown after restart).
+    // Drop it so a bad value is never reused; caller must fail closed.
+    clearOwnerSession();
     return null;
   }
-}
-
-/**
- * Ensure a valid owner session exists and is stored.
- * - Returns the working session (validating any stored token first).
- * - Detects stale/invalid legacy values and repairs via re-auth.
- * - With forceRefresh=true, skips validation and mints a fresh session.
- */
-export async function ensureOwnerSession(forceRefresh = false): Promise<OwnerSession | null> {
-  if (!forceRefresh) {
-    const existing = getOwnerToken();
-    if (existing) {
-      const validated = await validateTokenWithServer(existing);
-      if (validated) {
-        return { token: existing, user: validated.user, companion: validated.companion };
-      }
-      // Stored token is dead (expired / unknown after restart / foreign
-      // instance). Drop it before re-auth so a bad value is never reused.
-      clearOwnerSession();
-    } else if (getRawStoredTokenValue()) {
-      // A stale legacy value (e.g. user id) was stored - purge it.
-      clearOwnerSession();
-    }
-  } else {
+  if (getRawStoredTokenValue()) {
+    // A stale legacy value (e.g. user id) was stored - purge it.
     clearOwnerSession();
   }
-  return performOwnerReAuth();
+  return null;
 }

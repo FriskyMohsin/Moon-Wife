@@ -519,6 +519,36 @@ export function authenticateUser(email: string, password: string): { user?: Publ
   return { user: users[idx] };
 }
 
+/**
+ * Create an isolated anonymous Guest identity.
+ *
+ * A Guest is a real, server-authorized `role: 'user'` account with a random
+ * id/email that can never collide with the owner (`usr_mohsin_owner`) and
+ * carries no owner data, no capabilities beyond the public defaults, and no
+ * access to owner-guarded routes (memory, owner conversation, tasks, runner,
+ * admin). Guests enter through the public "Continue as Guest" entry point;
+ * they NEVER go through owner-login and are never granted the owner role.
+ */
+export function createGuestUser(): PublicUser {
+  const rand = crypto.randomBytes(8).toString('hex');
+  const guest: PublicUser = {
+    id: `guest_${rand}`,
+    email: `guest_${rand}@guests.hoorvia.local`,
+    passwordHash: crypto.createHash('sha256').update(`guest_${rand}_${Date.now()}`).digest('hex'),
+    role: 'user',
+    name: 'Guest',
+    createdAt: new Date().toISOString(),
+    lastLogin: new Date().toISOString(),
+    lastActive: new Date().toISOString(),
+  };
+
+  const users = getAllUsers();
+  users.push(guest);
+  saveJsonData('users.json', users);
+
+  return guest;
+}
+
 export function updateUserSuspension(userId: string, isSuspended: boolean, adminEmail: string = 'mohsin@hoorvia.net'): boolean {
   const users = getAllUsers();
   const idx = users.findIndex((u) => u.id === userId);
@@ -890,6 +920,35 @@ export function isOwnerSession(token?: string | null): boolean {
   if (!token) return false;
   const session = validateSessionToken(token);
   return !!session && session.role === 'owner' && session.userId === 'usr_mohsin_owner';
+}
+
+/**
+ * Revoke a session token server-side (Sign Out).
+ * Removes it from the live map AND the persisted store so the token can
+ * never validate again — even across server restarts. Returns true when a
+ * live or stored session was actually removed.
+ */
+export function revokeSessionToken(token: string): boolean {
+  if (!token) return false;
+  let removed = activeSessions.delete(token);
+  try {
+    const list = loadJsonData<StoredSession[]>('sessions.json', []);
+    const filtered = list.filter((s) => s.token !== token);
+    if (filtered.length !== list.length) {
+      removed = true;
+      saveJsonData('sessions.json', filtered);
+    }
+  } catch {
+    // Live-map removal above is authoritative for this process.
+  }
+  if (removed) {
+    try {
+      saveStoredSessions();
+    } catch {
+      // ignore
+    }
+  }
+  return removed;
 }
 
 // --- COMPANION PROFILES ---

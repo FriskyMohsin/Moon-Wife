@@ -64,6 +64,43 @@ function joinHome(...parts: string[]): string {
   return path.join(homeDir(), ...parts);
 }
 
+/**
+ * True only when this process is running on Windows.
+ *
+ * os.homedir() is a trustworthy base directory ONLY on the machine that owns the
+ * files. The production server is Linux (Azure), so os.homedir() there is /root,
+ * which is not Mohsin's Windows profile and is blocked by the Runner security
+ * guard. Never derive a Windows destination from a non-Windows host.
+ */
+function isWindowsHost(): boolean {
+  return process.platform === 'win32';
+}
+
+/**
+ * Extract an explicitly requested absolute Windows path (e.g. C:\Users\HP\Downloads\file.txt).
+ *
+ * Such a path is an explicit instruction about the destination on Mohsin's own
+ * machine, so it is always honored verbatim and is never rewritten against the
+ * server's home directory. Separators are normalised to backslashes so the path
+ * can never reach the Runner with mixed separators.
+ */
+function extractExplicitWindowsPath(text: string): string | null {
+  const quoted = text.match(/["']([A-Za-z]:[\\/][^"'\n]{1,240})["']/);
+  if (quoted) return normalizeExplicitWindowsPath(quoted[1]);
+  const bare = text.match(/(?:^|[\s(:])([A-Za-z]:[\\/][^\s"'<>|]{1,240})/);
+  if (bare) return normalizeExplicitWindowsPath(bare[1]);
+  return null;
+}
+
+function normalizeExplicitWindowsPath(raw: string): string {
+  return raw.trim().replace(/[.,;:)\]}]+$/, '').replace(/\//g, '\\');
+}
+
+function windowsBaseName(winPath: string): string {
+  const parts = winPath.split('\\').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : winPath;
+}
+
 function isConfirmationChallenge(res: any): boolean {
   return !!res && (res.requiresOwnerConfirmation === true || res.requiresConfirmation === true);
 }
@@ -77,6 +114,8 @@ interface FileIntent {
   folder: string;
   content: string;
   targetPath: string;
+  /** No explicit destination was given and this host cannot resolve a trustworthy Windows base. */
+  missingExplicitPath?: boolean;
 }
 
 function detectFileIntent(text: string): FileIntent | null {
@@ -84,11 +123,14 @@ function detectFileIntent(text: string): FileIntent | null {
   const mentionsFile = /(text\s+file|file|note|report|document|\.txt|\.md|\.json|\.csv|\.log|\.html)/i.test(text);
   if (!hasCreateVerb || !mentionsFile) return null;
 
-  let fileName: string | null = null;
-  const quoted = text.match(/["']([^"'\\/:*?<>|]{1,90}\.(txt|md|json|csv|log|html?|js|ts|py|yml|yaml))["']/i);
+  // An explicit Windows path is the authoritative destination and always wins.
+  const explicitPath = extractExplicitWindowsPath(text);
+
+  let fileName: string | null = explicitPath ? windowsBaseName(explicitPath) : null;
+  const quoted = fileName ? null : text.match(/["']([^"'\\/:*?<>|]{1,90}\.(txt|md|json|csv|log|html?|js|ts|py|yml|yaml))["']/i);
   if (quoted) {
     fileName = quoted[1].trim();
-  } else {
+  } else if (!fileName) {
     // Bare filenames never contain spaces: take the tight token ending at the
     // extension so leading verbs ("named", "called") are never swallowed.
     const bare = text.match(/\b([\w\-]{1,80}\.(txt|md|json|csv|log|html?|js|ts|py|yml|yaml))\b/i);
@@ -110,14 +152,21 @@ function detectFileIntent(text: string): FileIntent | null {
   const pick = containing?.[1] ?? contentEq?.[1] ?? withText?.[1] ?? quotedText?.[1] ?? '';
   content = pick.trim().replace(/^["']|["']$/g, '').trim();
 
-  const targetPath = joinHome(folder, fileName);
-  return { fileName, folder, content, targetPath };
+  if (explicitPath) {
+    return { fileName, folder, content, targetPath: explicitPath };
+  }
+  if (!isWindowsHost()) {
+    return { fileName, folder, content, targetPath: '', missingExplicitPath: true };
+  }
+  return { fileName, folder, content, targetPath: joinHome(folder, fileName) };
 }
 
 interface FolderIntent {
   folderName: string;
   parent: string;
   targetPath: string;
+  /** No explicit destination was given and this host cannot resolve a trustworthy Windows base. */
+  missingExplicitPath?: boolean;
 }
 
 function detectFolderIntent(text: string): FolderIntent | null {
@@ -125,13 +174,26 @@ function detectFolderIntent(text: string): FolderIntent | null {
   if (!/(folder|directory|project\s+folder)/i.test(text)) return null;
   // Do not hijack file-creation instructions.
   if (/\.(txt|md|json|csv|log|html?|js|ts)\b/i.test(text)) return null;
-  const quoted = text.match(/["']([^"'\\/:*?<>|]{1,80})["']/);
-  const name = quoted?.[1]?.trim();
+
+  // An explicit Windows path is the authoritative destination and always wins.
+  const explicitPath = extractExplicitWindowsPath(text);
+
+  let name: string | null = explicitPath ? windowsBaseName(explicitPath) : null;
+  const quoted = name ? null : text.match(/["']([^"'\\/:*?<>|]{1,80})["']/);
+  name = name || quoted?.[1]?.trim() || null;
   if (!name) return null;
+
   let parent = 'Desktop';
   if (/downloads?/i.test(text)) parent = 'Downloads';
   else if (/documents?/i.test(text)) parent = 'Documents';
   else if (/desktop/i.test(text)) parent = 'Desktop';
+
+  if (explicitPath) {
+    return { folderName: name, parent, targetPath: explicitPath };
+  }
+  if (!isWindowsHost()) {
+    return { folderName: name, parent, targetPath: '', missingExplicitPath: true };
+  }
   return { folderName: name, parent, targetPath: joinHome(parent, name) };
 }
 
@@ -246,6 +308,8 @@ async function executeFileCreation(
 ): Promise<RealTaskResult> {
   const content = intent.content || `Task "${task.task_name}" executed by Maryam.\n${task.instructions}`;
   let created: any;
+  // DIAGNOSTIC EVIDENCE (safe: ids + resolved path + tool only; never content/tokens).
+  console.log(`[TASK_DISPATCH] task_id=${task.task_id} tool=file.create targetPath=${intent.targetPath}`);
   try {
     created = await executor('file.create', { path: intent.targetPath, content });
   } catch (err: any) {
@@ -331,6 +395,8 @@ async function executeFolderCreation(
   executor: TaskToolExecutor,
   startedAt: string
 ): Promise<RealTaskResult> {
+  // DIAGNOSTIC EVIDENCE (safe: ids + resolved path + tool only; never tokens).
+  console.log(`[TASK_DISPATCH] task_id=${task.task_id} tool=folder.create targetPath=${intent.targetPath}`);
   try {
     const created = await executor('folder.create', { path: intent.targetPath });
     if (isConfirmationChallenge(created)) {
@@ -569,6 +635,32 @@ async function safeLocalFallbackExecutor(tool: string, _params: any = {}): Promi
   throw new Error(`No live tool executor is wired for "${tool}" in this context.`);
 }
 
+/**
+ * Fails closed when no explicit destination was supplied and this host cannot
+ * resolve a trustworthy Windows base directory. Nothing is guessed and no
+ * /root-style container path is ever invented or sent to the Runner.
+ */
+function targetPathRequiredResult(
+  task: ScheduledTask,
+  outputType: 'file' | 'folder',
+  outputName: string,
+  startedAt: string
+): RealTaskResult {
+  return {
+    success: false,
+    result_summary:
+      `TARGET_PATH_REQUIRED: "${task.task_name}" has no explicit destination path, and this server is not the Windows machine that owns the files. ` +
+      `No action was taken and no container path was used. State the exact Windows destination, for example ` +
+      `C:\\Users\\<windows-user>\\Downloads\\${outputName}.`,
+    error: 'TARGET_PATH_REQUIRED',
+    output: {
+      output_type: outputType, output_name: outputName, output_path: null, output_url: null,
+      result_summary: 'TARGET_PATH_REQUIRED', executor: 'task planner',
+      started_at: startedAt, completed_at: nowIso(), error: 'TARGET_PATH_REQUIRED',
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main entry: instructions -> real execution
 // ---------------------------------------------------------------------------
@@ -597,11 +689,17 @@ export async function executeTaskInstructions(
 
   const fileIntent = detectFileIntent(text);
   if (fileIntent) {
+    if (fileIntent.missingExplicitPath) {
+      return targetPathRequiredResult(task, 'file', fileIntent.fileName, startedAt);
+    }
     return executeFileCreation(task, fileIntent, executor, startedAt);
   }
 
   const folderIntent = detectFolderIntent(text);
   if (folderIntent) {
+    if (folderIntent.missingExplicitPath) {
+      return targetPathRequiredResult(task, 'folder', folderIntent.folderName, startedAt);
+    }
     return executeFolderCreation(task, folderIntent, executor, startedAt);
   }
 

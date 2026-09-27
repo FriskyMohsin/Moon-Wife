@@ -14,6 +14,7 @@ import {
   User,
   Sparkles,
   Video,
+  LogOut,
 } from 'lucide-react';
 import { EmotionState, VoiceState } from '../../types';
 
@@ -32,6 +33,7 @@ interface DesktopHeaderProps {
   platformMode?: string;
   onSwitchPlatformMode?: (mode?: any) => void;
   onOpenSettings?: () => void;
+  onSignOut?: () => void;
 }
 
 export const DesktopHeader: React.FC<DesktopHeaderProps> = ({
@@ -49,6 +51,7 @@ export const DesktopHeader: React.FC<DesktopHeaderProps> = ({
   platformMode = 'owner',
   onSwitchPlatformMode,
   onOpenSettings,
+  onSignOut,
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [isElectron, setIsElectron] = useState(false);
@@ -194,6 +197,18 @@ export const DesktopHeader: React.FC<DesktopHeaderProps> = ({
         >
           {isConversationOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
         </button>
+
+        {/* Owner Sign Out (revokes server session, returns to public) */}
+        {isOwner && onSignOut && (
+          <button
+            onClick={onSignOut}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-zinc-400 hover:text-white hover:bg-rose-950/60 border border-transparent hover:border-rose-800/40 transition-all text-[10px] font-medium"
+            title="Sign Out (end owner session)"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline">Sign Out</span>
+          </button>
+        )}
 
         {/* Electron Native Window Controls (Minimize, Maximize, Close) */}
         {isElectron && (

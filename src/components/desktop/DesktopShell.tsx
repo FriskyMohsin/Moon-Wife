@@ -64,6 +64,9 @@ interface DesktopShellProps {
 
   // Optional Tab View Content to render when not on 'home'
   activeViewContent?: React.ReactNode;
+
+  // Owner Sign Out (server revoke + return to public)
+  onSignOut?: () => void;
 }
 
 export const DesktopShell: React.FC<DesktopShellProps> = ({
@@ -106,6 +109,7 @@ export const DesktopShell: React.FC<DesktopShellProps> = ({
   onSwitchPlatformMode,
   isOwner = true,
   activeViewContent,
+  onSignOut,
 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -139,6 +143,7 @@ export const DesktopShell: React.FC<DesktopShellProps> = ({
         platformMode={platformMode}
         onSwitchPlatformMode={onSwitchPlatformMode}
         onOpenSettings={onOpenSettings}
+        onSignOut={onSignOut}
       />
 
       {/* Main 3-Zone Workspace */}

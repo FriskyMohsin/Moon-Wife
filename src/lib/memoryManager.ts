@@ -1,4 +1,5 @@
 import { MemoryBank, MemoryCategoryKey, MemoryUpdateResult } from '../types';
+import { getOwnerToken, getOwnerAuthHeaders } from './ownerAuth';
 
 export const DEFAULT_MEMORY_BANK: MemoryBank = {
   userProfile: {
@@ -153,13 +154,16 @@ export function saveMemoryBank(memory: MemoryBank): void {
     diagnosticsRecord.lastWriteLatencyMs = writeLatency;
     diagnosticsRecord.lastWriteError = null;
 
-    // Asynchronously synchronize with server storage
-    if (typeof window !== 'undefined' && window.location) {
+    // Asynchronously synchronize with server storage.
+    // SECURITY: the shared core memory bank is Mohsin's private owner data. It
+    // is only ever synced with a validated owner session, so a guest/public
+    // browser keeps its memory local and can never read or write the owner's.
+    if (typeof window !== 'undefined' && window.location && getOwnerToken()) {
       const syncPayload = JSON.stringify(memory);
       const url = new URL('/api/memory', window.location.origin).toString();
       fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getOwnerAuthHeaders({ 'Content-Type': 'application/json' }),
         body: syncPayload,
       })
         .then((res) => {

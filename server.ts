@@ -130,6 +130,30 @@ const server = http.createServer(app);
 
 app.use(express.json({ limit: '20mb' }));
 
+// ---------------------------------------------------------------------------
+// TEMPORARY EMERGENCY LOCK — public HTTP 403.
+// Controlled ONLY by the HOORVIA_EMERGENCY_LOCK app setting (Azure Portal or
+// CLI). No secret, token, or bypass exists in client code or public URLs.
+//   Enable:  HOORVIA_EMERGENCY_LOCK=1  (then restart)
+//   Remove:  delete the setting (or set it to 0) and restart the app.
+// While active, every request gets a genuine 403 + static page, except the
+// platform health probe (/api/health) which must stay 200. No application
+// UI, APIs, or data are reachable while locked. No data is modified.
+// ---------------------------------------------------------------------------
+const EMERGENCY_LOCK_PAGE = '<!doctype html><html lang="en"><head><meta charset="UTF-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+  '<title>Hoorvia — Temporarily Unavailable</title></head>' +
+  '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0A070B;color:#f1f5f9;font-family:system-ui,sans-serif;">' +
+  '<main style="text-align:center;padding:2rem;max-width:32rem;">' +
+  '<h1 style="font-size:1.5rem;margin:0 0 0.75rem;">Hoorvia is temporarily unavailable.</h1>' +
+  '<p style="color:#94a3b8;font-size:0.95rem;margin:0;">Please check back shortly.</p>' +
+  '</main></body></html>';
+app.use((req, res, next) => {
+  if (process.env.HOORVIA_EMERGENCY_LOCK !== '1') return next();
+  if (req.path === '/api/health') return next();
+  res.status(403).type('html').send(EMERGENCY_LOCK_PAGE);
+});
+
 // Native HTTP Compression Middleware (Brotli preferred, Gzip fallback)
 app.use((req, res, next) => {
   const acceptEncoding = (req.headers['accept-encoding'] || '') as string;
@@ -212,6 +236,7 @@ app.use([
   '/api/telegram',
   '/api/whatsapp',
   '/api/owner/conversation',
+  '/api/memory',
   '/api/hoorvia/tasks',
   '/api/hoorvia/connectivity/test',
 ], (req, res, next) => {
@@ -3639,23 +3664,12 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   // Direct execution check for safe system, dev, and file tools on local host
   // When an active runner on Windows is not long-polling, execute immediately without hanging in queue
   const isDirectSystemTool = runnerToolName === 'system.health' || runnerToolName === 'system.node_version' || runnerToolName === 'system.system_info';
-  const isDirectSafeTool = runnerToolName.startsWith('system.') || runnerToolName.startsWith('file.') || runnerToolName.startsWith('folder.') || runnerToolName.startsWith('dev.') || runnerToolName.startsWith('omniroute.');
   const isRelayAlive = !!activeRelayPollRes;
   const isRelayRecent = currentRunnerState.connectionMethod === 'relay' && Date.now() - (currentRunnerState.lastChecked || 0) < 60000;
 
-  if (isDirectSafeTool && !isRelayAlive && !process.env.MARYAM_RELAY_URL && !process.env.RELAY_GATEWAY_URL) {
-    try {
-      const runnerEngine = nodeRequire('./local-runner/runner.cjs');
-      const result = await runnerEngine.routeTool(runnerToolName, params);
-      currentRunnerState.lastChecked = Date.now();
-      return result;
-    } catch (e: any) {
-      console.warn(`[Tool Dispatcher] Direct safe execution note: ${e.message}, falling back to queue`);
-    }
-  }
-
   // 1. Authoritative Relay check (if active long-poll is waiting OR relay was checked in last 1 minute)
   if (isRelayAlive || isRelayRecent) {
+    console.log(`[TASK_DISPATCH] tool=${runnerToolName} route=relay_long_poll livePoll=${isRelayAlive} recent=${isRelayRecent} corr=${correlationId} path=${params?.path || 'n/a'}`);
     return await enqueueRelayTask(runnerToolName, params, correlationId);
   }
 
@@ -3707,7 +3721,7 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   // 3. Third priority: External Standalone Cloud Run Relay Gateway
   const externalRelayUrl = process.env.MARYAM_RELAY_URL || process.env.RELAY_GATEWAY_URL;
   if (externalRelayUrl) {
-    console.log(`[Tool Dispatcher] Routing via standalone Cloud Run Relay: ${externalRelayUrl}`);
+    console.log(`[TASK_DISPATCH] tool=${runnerToolName} route=external_relay livePoll=${isRelayAlive} corr=${correlationId} path=${params?.path || 'n/a'}`);
     const extRes = await dispatchViaExternalRelay(externalRelayUrl, runnerToolName, params);
     if (extRes && extRes.success !== false && !extRes.error) {
       return extRes;
@@ -3731,10 +3745,12 @@ async function dispatchToolToRunner(toolName: string, params: any = {}, preferre
   }
 
   // 5. Fallback: Runner is offline
+  console.warn(`[TASK_DISPATCH] tool=${runnerToolName} route=offline_fallback livePoll=${isRelayAlive} corr=${correlationId} path=${params?.path || 'n/a'}`);
   return {
     success: false,
     tool: runnerToolName,
     available: false,
+    error: 'RUNNER_EXECUTION_PATH_OFFLINE',
     runnerStatus: 'Local Runner Offline',
     omnirouteStatus: 'OmniRoute Unavailable',
     correlationId,
@@ -5269,8 +5285,9 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   }
 
   // Canonical Maryam Owner WebSocket Route (/api/live-ws)
-  const isOwner = effectiveToken === 'MohsinOwnerKey2026!' || (Boolean(effectiveToken) && validateSessionToken(effectiveToken)?.role === 'owner');
-  const ownerSession = isOwner ? (validateSessionToken(effectiveToken) || { userId: 'usr_mohsin_owner', role: 'owner' as const }) : null;
+  // Live owner access requires a current, revocable server-side session.
+  const ownerSession = effectiveToken ? validateSessionToken(effectiveToken) : null;
+  const isOwner = ownerSession?.role === 'owner' && ownerSession.userId === 'usr_mohsin_owner';
 
   if (!isOwner || !ownerSession || ownerSession.role !== 'owner') {
     console.warn(`[${connectionId}] [AUTH_FAILED] Rejecting with 1008: Owner authorization required (token: ${effectiveToken ? `len=${effectiveToken.length}` : 'missing'})`);
