@@ -11,6 +11,7 @@ import {
   getUserCompanionMemories,
   buildSystemPrompt,
   buildRelationshipPersonaReinforcement,
+  PARI_CREATOR_DIRECTIVE,
   getEncryptedCredential,
   recordUserUsage,
   recordUserApiRequest,
@@ -177,6 +178,7 @@ export async function handleHoorviaLiveWsConnection(
   const companionSysPrompt =
     (companion.systemPrompt || buildSystemPrompt(companion)) +
     buildRelationshipPersonaReinforcement(companion) +
+    PARI_CREATOR_DIRECTIVE +
     (memories.length > 0
       ? `\n\nREMEMBERED FACTS ABOUT USER (${userName}):\n` +
         memories.map((m) => `- [${m.category.toUpperCase()}] ${m.fact}`).join('\n')
