@@ -29,6 +29,7 @@ import {
 import {
   BROWSER_TOOL_DECLARATIONS,
   respondToLiveToolCalls,
+  voiceBrowserDebugLog,
 } from './pariBrowserTools';
 
 export function registerHoorviaLiveWs(server: HttpServer) {
@@ -367,6 +368,9 @@ export async function handleHoorviaLiveWsConnection(
               },
             },
             systemInstruction: companionSysPrompt,
+            // Transcribe what the user said so the server can see the exact
+            // command text (also written to voice-browser-debug.log).
+            inputAudioTranscription: {},
             // Pari AI Phase 2: the same 8 browser_* tools as text chat, shared
             // via pariBrowserTools so voice commands ("YouTube kholo", ...)
             // drive the user's private server-side browser too.
@@ -388,6 +392,9 @@ export async function handleHoorviaLiveWsConnection(
                 console.log(
                   `[LIVE_TOOL_CALL] ${liveToolCalls.length} browser call(s) for user ${userId}: ` +
                     liveToolCalls.map((c: any) => c?.name).join(', ')
+                );
+                voiceBrowserDebugLog(
+                  `TOOLCALL user=${userId} tools=${liveToolCalls.map((c: any) => c?.name).join(',')}`
                 );
                 try {
                   await respondToLiveToolCalls(liveSession, userId, liveToolCalls);
@@ -423,6 +430,12 @@ export async function handleHoorviaLiveWsConnection(
               // Turn completion
               if (message.serverContent?.turnComplete) {
                 clientWs.send(JSON.stringify({ type: 'turnComplete' }));
+              }
+
+              // What the user actually said (input transcription) — debug log.
+              const inputTx = (message.serverContent as any)?.inputTranscription?.text;
+              if (typeof inputTx === 'string' && inputTx.trim()) {
+                voiceBrowserDebugLog(`HEARD user=${userId} text="${inputTx.trim().slice(0, 200)}"`);
               }
             },
             onerror: (err: any) => {

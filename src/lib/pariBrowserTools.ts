@@ -214,6 +214,16 @@ export interface LiveSessionLike {
   }): void;
 }
 
+/** Append-only debug log for the voice→browser path (data/voice-browser-debug.log). */
+export function voiceBrowserDebugLog(line: string): void {
+  try {
+    const p = resolveDataPath('voice-browser-debug.log');
+    fs.appendFileSync(p, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* debug logging must never break the call */
+  }
+}
+
 /**
  * Handle Live API tool calls: execute each one against the pariBrowser engine
  * for THIS user, then send the results back with matching ids. Never throws —
@@ -236,6 +246,10 @@ export async function respondToLiveToolCalls(
     } catch (err: any) {
       result = { ok: false, message: err?.message || 'Browser action failed.' };
     }
+    const r = result as any;
+    voiceBrowserDebugLog(
+      `EXEC user=${userId} tool=${name} args=${JSON.stringify(call?.args || {}).slice(0, 200)} => ok=${r?.ok} msg=${String(r?.message || r?.error || '').slice(0, 200)}`
+    );
     functionResponses.push({ id: call?.id, name, response: result });
   }
   if (functionResponses.length === 0) return;
