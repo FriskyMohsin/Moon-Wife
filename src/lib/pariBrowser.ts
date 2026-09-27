@@ -144,7 +144,9 @@ async function getBrowser(): Promise<Browser> {
   // time, not at module import time.
   const { chromium } = await import('playwright');
   const launchOptions: Parameters<typeof chromium.launch>[0] = {
-    headless: true,
+    // Headless by default (production servers have no display). Set
+    // PARI_BROWSER_HEADLESS=false to SEE the browser window (local dev/demo).
+    headless: process.env.PARI_BROWSER_HEADLESS !== 'false',
     args: ['--no-sandbox'],
   };
   const exe = process.env.PARI_CHROMIUM_EXECUTABLE?.trim();
