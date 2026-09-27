@@ -2318,6 +2318,44 @@ export interface ChatExecutionResult {
   userErrorMessage?: string;
   internalError?: string;
   statusCode: number;
+  toolActions?: string[];
+}
+
+/**
+ * Optional Gemini function-calling hooks for the chat executor.
+ * When provided, the declarations are passed as tools to generateContent and
+ * function calls are resolved via `execute` in a bounded follow-up loop.
+ */
+export interface BrowserToolHandlers {
+  declarations: any[];
+  execute: (name: string, args: any) => Promise<any>;
+}
+
+function summarizeBrowserToolCall(name: string, args: any): string {
+  const a = args || {};
+  switch (name) {
+    case 'browser_open': {
+      const raw = String(a.url || '');
+      try {
+        return new URL(raw).hostname || raw.slice(0, 40);
+      } catch {
+        return raw.slice(0, 40);
+      }
+    }
+    case 'browser_type':
+      return `${String(a.ref || '')} "${String(a.text || '').slice(0, 24)}"`;
+    case 'browser_click':
+      return String(a.ref || '');
+    case 'browser_press':
+      return String(a.key || '');
+    case 'browser_youtube':
+      return String(a.action || '');
+    case 'search_videos':
+    case 'search_articles':
+      return `"${String(a.query || '').slice(0, 40)}"`;
+    default:
+      return '';
+  }
 }
 
 export async function executeHoorviaUserChatWithFailover(
@@ -2326,7 +2364,8 @@ export async function executeHoorviaUserChatWithFailover(
   fullSystemPrompt: string,
   formattedHistory: any[],
   companionName: string,
-  modelOverride?: string
+  modelOverride?: string,
+  toolHandlers?: BrowserToolHandlers
 ): Promise<ChatExecutionResult> {
   const cred = getEncryptedCredential(userId);
   // Pari AI: an explicit model (e.g. per-model BYOK routing) wins over the
@@ -2370,10 +2409,58 @@ export async function executeHoorviaUserChatWithFailover(
           contents: formattedHistory,
           config: {
             systemInstruction: fullSystemPrompt,
+            // Browser control tools (optional). When toolHandlers is absent
+            // this spread is empty, keeping behavior byte-identical to before.
+            ...(toolHandlers ? { tools: [{ functionDeclarations: toolHandlers.declarations }] } : {}),
           },
         });
 
-        const replyText = response.text || 'I am here with you.';
+        // Pari AI: browser tool-calling loop (Phase 2). Bounded to 6 rounds,
+        // same model throughout (no failover mid-loop); on any tool-loop
+        // error we break and return the last text we have.
+        const toolActions: string[] = [];
+        let replyText = response.text || 'I am here with you.';
+        if (toolHandlers && (response.functionCalls?.length || 0) > 0) {
+          let currentResponse = response;
+          const workingContents: any[] = [...formattedHistory];
+          for (let round = 0; round < 6; round++) {
+            const calls = currentResponse.functionCalls || [];
+            if (calls.length === 0) break;
+            // Model-side functionCall parts.
+            workingContents.push({
+              role: 'model',
+              parts: calls.map((c: any) => ({ functionCall: { name: c.name, args: c.args } })),
+            });
+            for (const call of calls) {
+              let result: any;
+              const callName = String(call.name || '');
+              try {
+                result = await toolHandlers.execute(callName, call.args);
+              } catch (err: any) {
+                result = { ok: false, message: err?.message || 'Tool execution failed.' };
+              }
+              toolActions.push(`${callName}(${summarizeBrowserToolCall(callName, call.args)})`);
+              workingContents.push({
+                role: 'user',
+                parts: [{ functionResponse: { name: callName, response: result } }],
+              });
+            }
+            try {
+              currentResponse = await ai.models.generateContent({
+                model: currentModel,
+                contents: workingContents,
+                config: {
+                  systemInstruction: fullSystemPrompt,
+                  tools: [{ functionDeclarations: toolHandlers.declarations }],
+                },
+              });
+            } catch (err: any) {
+              // Tool-loop error: stop looping, keep the last text.
+              break;
+            }
+            replyText = currentResponse.text || replyText;
+          }
+        }
         const isFailover = currentModel !== initialModel;
 
         // If failover occurred and succeeded, update user's selectedModel in storage.
@@ -2414,6 +2501,7 @@ export async function executeHoorviaUserChatWithFailover(
           isFailover,
           retryCount: totalRetries,
           statusCode: 200,
+          toolActions,
         };
       } catch (err: any) {
         lastError = err;

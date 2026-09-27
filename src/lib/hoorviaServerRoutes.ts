@@ -1,5 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import {
   initHoorviaPlatform,
@@ -90,6 +92,20 @@ import {
   type PariFileKind,
 } from './pariFiles';
 import { generateImageForUser, buildStudioPack, PariImageAccessError, type StudioPlatform } from './pariStudio';
+import { resolveDataPath } from './runtimePaths';
+import {
+  getBrowserSessionStatus,
+  ensureBrowserSession,
+  closeBrowserSession,
+  browserOpen,
+  browserSnapshot,
+  browserClick,
+  browserType,
+  browserPress,
+  browserYoutube,
+  browserScreenshot,
+} from './pariBrowser';
+import { searchVideos, searchArticles } from './contentSearch';
 
 export interface AuthenticatedRequest extends Request {
   hoorviaUser?: {
@@ -808,7 +824,32 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
         memories.map((m) => `- [${m.category.toUpperCase()}] ${m.fact}`).join('\n')
       : '';
 
-    const fullSystemPrompt = systemInstruction + memoryContext;
+    // Pari AI Phase 2: browser automation. Pari can drive the user's private
+    // server-side browser when they explicitly ask — including in Roman Urdu
+    // like "YouTube kholo", "play kar de", "10 second aage kar de".
+    const BROWSER_CONTROL_PROMPT = `
+
+BROWSER CONTROL: You can control the user's private server-side web browser with the available browser_* tools. Use them ONLY when the user explicitly asks for a browser or playback action (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo") — never for general questions or lookups. Never invent URLs; if the destination is unclear, ask the user which page to open. For YouTube: open https://www.youtube.com first (or the exact watch URL the user gave), let the user pick a video, and only then use browser_youtube — it works when a YouTube watch page is already open. Keep tool chatter out of the reply: do the actions, then answer briefly in the user's language.`;
+
+    // Pari AI: universal content search. Videos for anything the user wants
+    // to SEE how to do (exercises, DIY, repairs); articles for anything they
+    // want to READ more about (medical queries use PubMed, the free official
+    // source). Only ever share links the tools returned — never invent URLs.
+    const CONTENT_SEARCH_PROMPT = `
+
+CONTENT SEARCH: You have two lookup tools.
+- search_videos(query): call it when the user asks for a video, wants to watch something, or wants to SEE how something is done (an exercise like "push up kaise karte hain", a repair like "leaking tap kaise fix karen", any how-to). Pass a short English query like "push up proper form" or "fix leaking tap".
+- search_articles(query): call it when the user wants to read more about something, asks for an article/study they can't find, or wants sources (for example "vitamin D deficiency ka treatment", "best budget phones 2026"). Pass a short English query.
+After calling, include the results in your reply in the user's language, in this exact shape so the app renders them as cards:
+🎥 <video title>
+<video url>
+(one block per video, max 3)
+📄 <article title> — <domain>
+<article url>
+(one block per article, max 5)
+Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fix" a URL. If the tool returned a fallback search link instead, share it as "Yahan search kar ke dekh lo:" and say no direct result was found.`;
+
+    const fullSystemPrompt = systemInstruction + memoryContext + BROWSER_CONTROL_PROMPT + CONTENT_SEARCH_PROMPT;
 
     // Pari AI: history comes from the SERVER-persisted thread (memory fix),
     // not from whatever the client claims.
@@ -818,13 +859,215 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     // Persist the user turn immediately so context survives retries.
     appendPariThreadMessage(userId, 'user', message);
 
+    // Pari AI: Phase 2 browser tools (Gemini function-calling). Each execute
+    // call runs the pariBrowser engine for THIS user only; screenshot bytes
+    // are saved under data/hoorvia_platform/browser-shots/<userId>/ and the
+    // model only ever receives a small JSON result (never raw Buffers).
+    const browserSafeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const browserToolDeclarations = [
+      {
+        name: 'browser_open',
+        description: "Open a web page in the user's private server-side browser.",
+        parameters: {
+          type: 'OBJECT',
+          properties: { url: { type: 'STRING', description: 'The full URL to open (https://...).' } },
+          required: ['url'],
+        },
+      },
+      {
+        name: 'browser_snapshot',
+        description: 'Get the accessibility tree of the current page so you can see clickable elements with refs.',
+        parameters: { type: 'OBJECT', properties: {} },
+      },
+      {
+        name: 'browser_click',
+        description: 'Click an element by its snapshot ref.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' } },
+          required: ['ref'],
+        },
+      },
+      {
+        name: 'browser_type',
+        description: 'Type text into an element by ref.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' },
+            text: { type: 'STRING', description: 'Text to type.' },
+          },
+          required: ['ref', 'text'],
+        },
+      },
+      {
+        name: 'browser_press',
+        description: 'Press a keyboard key, e.g. k, j, l, Enter, Tab, Escape.',
+        parameters: {
+          type: 'OBJECT',
+          properties: { key: { type: 'STRING', description: 'The key to press.' } },
+          required: ['key'],
+        },
+      },
+      {
+        name: 'browser_youtube',
+        description:
+          'Control YouTube playback: play, pause, seek_forward_10, seek_back_10, stop. Page must already be a YouTube watch page.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            action: {
+              type: 'STRING',
+              enum: ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'],
+              description: 'The playback action.',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'browser_screenshot',
+        description: 'Capture a screenshot of the current page.',
+        parameters: { type: 'OBJECT', properties: {} },
+      },
+      {
+        name: 'browser_close',
+        description: "Close the user's browser session.",
+        parameters: { type: 'OBJECT', properties: {} },
+      },
+      {
+        name: 'search_videos',
+        description:
+          'Search YouTube for real demo/how-to videos about anything (exercises, DIY, repairs). Call when the user asks for a video or wants to SEE how something is done.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            query: {
+              type: 'STRING',
+              description: 'Short English search query, e.g. "push up proper form" or "fix leaking tap".',
+            },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'search_articles',
+        description:
+          'Search the web for real articles (medical queries use PubMed). Call when the user wants to read more about something or asks for an article/study.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            query: {
+              type: 'STRING',
+              description: 'Short English search query, e.g. "vitamin D deficiency treatment".',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    ];
+
+    const browserToolHandlers = {
+      declarations: browserToolDeclarations,
+      execute: async (name: string, args: any): Promise<any> => {
+        try {
+          switch (name) {
+            case 'browser_open': {
+              const url = String(args?.url || '');
+              if (!url) return { ok: false, message: 'url is required.' };
+              const r = await browserOpen(userId, url);
+              return { ok: r.ok, message: r.message, url: r.url || undefined, title: r.title || undefined };
+            }
+            case 'browser_snapshot': {
+              const r = await browserSnapshot(userId);
+              return { ok: r.ok, message: r.message, snapshot: (r as any).snapshot };
+            }
+            case 'browser_click': {
+              const r = await browserClick(userId, String(args?.ref || ''));
+              return { ok: r.ok, message: r.message };
+            }
+            case 'browser_type': {
+              // The pariBrowser engine refuses password fields itself;
+              // surface its refusal message to the model unchanged.
+              const r = await browserType(userId, String(args?.ref || ''), String(args?.text || ''));
+              return { ok: r.ok, message: r.message };
+            }
+            case 'browser_press': {
+              const r = await browserPress(userId, String(args?.key || ''));
+              return { ok: r.ok, message: r.message };
+            }
+            case 'browser_youtube': {
+              const action = String(args?.action || '');
+              const valid = ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'] as const;
+              if (!(valid as readonly string[]).includes(action)) {
+                return { ok: false, message: 'Invalid YouTube action. Use play, pause, seek_forward_10, seek_back_10, or stop.' };
+              }
+              const r = await browserYoutube(userId, action as (typeof valid)[number]);
+              return { ok: r.ok, message: r.message };
+            }
+            case 'browser_screenshot': {
+              const png = await browserScreenshot(userId);
+              const relFile = ['browser-shots', browserSafeUserId, `shot-${Date.now()}.png`].join('/');
+              fs.writeFileSync(resolveDataPath('hoorvia_platform', ...relFile.split('/')), png);
+              return { ok: true, message: 'Screenshot saved', file: relFile };
+            }
+            case 'browser_close': {
+              const r = await closeBrowserSession(userId);
+              return { ok: r.ok, message: r.ok ? 'Browser session closed.' : 'No active browser session.' };
+            }
+            case 'search_videos': {
+              const query = String(args?.query || '').slice(0, 120);
+              if (!query.trim()) return { ok: false, message: 'query is required.' };
+              const r = await searchVideos(query);
+              if (r.fallback) {
+                return {
+                  ok: true,
+                  fallback: true,
+                  message: 'No direct video found; share the search link instead.',
+                  searchUrl: r.fallbackUrl,
+                  searchTitle: r.fallbackTitle,
+                };
+              }
+              return {
+                ok: true,
+                videos: r.videos.map((v) => ({ title: v.title, url: v.url })),
+              };
+            }
+            case 'search_articles': {
+              const query = String(args?.query || '').slice(0, 120);
+              if (!query.trim()) return { ok: false, message: 'query is required.' };
+              const r = await searchArticles(query);
+              if (r.fallback) {
+                return {
+                  ok: true,
+                  fallback: true,
+                  message: 'No direct article found; share the search link instead.',
+                  searchUrl: r.fallbackUrl,
+                  searchTitle: r.fallbackTitle,
+                };
+              }
+              return {
+                ok: true,
+                articles: r.articles.map((a) => ({ title: a.title, url: a.url, domain: a.domain, snippet: a.snippet })),
+              };
+            }
+            default:
+              return { ok: false, message: `Unknown tool: ${name}` };
+          }
+        } catch (err: any) {
+          return { ok: false, message: err?.message || 'Browser action failed.' };
+        }
+      },
+    };
+
     const chatResult = await executeHoorviaUserChatWithFailover(
       userId,
       effectiveApiKey,
       fullSystemPrompt,
       contents,
       companion.name,
-      effectiveModel
+      effectiveModel,
+      browserToolHandlers
     );
 
     if (!chatResult.success) {
@@ -836,6 +1079,14 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     }
 
     let reply = chatResult.reply || '';
+
+    // Pari AI: show the user which browser actions were taken this turn.
+    // (search_videos/search_articles results are already in the reply text,
+    // so only browser_* actions get the footer line.)
+    const browserActions = (chatResult.toolActions || []).filter((a) => a.startsWith('browser_'));
+    if (browserActions.length > 0) {
+      reply += `\n\n🌐 Browser: ${browserActions.join(', ')}`;
+    }
 
     // Pari AI: persist the assistant turn (thread capped at 50).
     appendPariThreadMessage(userId, 'model', reply);
@@ -1190,13 +1441,48 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     }
   );
 
-  // --- Browser automation hooks: HONEST 501 (Phase 2, not a fake success) ---
-  app.post('/api/hoorvia/client/browser/jobs', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
-    return res.status(501).json({
-      error: 'browser_automation_phase2',
-      message:
-        'Browser automation arrives in Phase 2. The self-hosted Playwright executor is not wired up yet, so this endpoint intentionally returns 501 instead of a fake success.',
-    });
+  // --- BROWSER AUTOMATION (Phase 2: server-side Playwright, per-user isolated sessions) ---
+  app.get('/api/hoorvia/client/browser/session', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      res.json(await getBrowserSessionStatus(req.hoorviaUser!.id));
+    } catch (err: any) {
+      console.error('[PariAI] browser session status failed:', err?.message || err);
+      res.status(500).json({ error: 'Could not check browser session status.' });
+    }
+  });
+
+  app.post('/api/hoorvia/client/browser/session', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      res.json(await ensureBrowserSession(req.hoorviaUser!.id));
+    } catch (err: any) {
+      console.error('[PariAI] browser session ensure failed:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Could not open a browser session.' });
+    }
+  });
+
+  app.delete('/api/hoorvia/client/browser/session', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      res.json(await closeBrowserSession(req.hoorviaUser!.id));
+    } catch (err: any) {
+      console.error('[PariAI] browser session close failed:', err?.message || err);
+      res.status(500).json({ error: 'Could not close the browser session.' });
+    }
+  });
+
+  app.get('/api/hoorvia/client/browser/screenshot', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const status = await getBrowserSessionStatus(req.hoorviaUser!.id);
+      if (!status.active) {
+        return res.status(404).json({ error: 'No active browser session.' });
+      }
+      const png = await browserScreenshot(req.hoorviaUser!.id);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(png);
+    } catch (err: any) {
+      console.error('[PariAI] browser screenshot failed:', err?.message || err);
+      res.status(500).json({ error: 'Could not capture a screenshot.' });
+    }
   });
 
   // --- OWNER ADMIN ENDPOINTS (Mohsin Only) ---

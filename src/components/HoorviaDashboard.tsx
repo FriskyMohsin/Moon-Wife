@@ -79,7 +79,12 @@ interface ApiKeyEntry {
 interface ClientUsage {
   today: { chat: number; images: number; files: number; liveMinutes: number };
   week: { chat: number; images: number; files: number; liveMinutes: number };
-  limits: { chat: number; images: number; files: number; liveMinutes: number };
+  limits: {
+    chat: { perDay: number; perWeek: number };
+    images: { perDay: number; perWeek: number };
+    files: { perDay: number; perWeek: number };
+    liveMinutes: { perDay: number; perWeek: number };
+  };
 }
 
 interface HoorviaDashboardProps {
@@ -99,6 +104,38 @@ const fmtTime = (ts?: string | number | Date) => {
   } catch {
     return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
+};
+
+// Pari AI: render chat text with clickable links (video/article cards the
+// model emits as 🎥/📄 blocks, plus any plain URLs). Plain-text safe: no HTML
+// injection — only the URL itself becomes an anchor.
+const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
+
+const renderMessageText = (text: string): React.ReactNode => {
+  if (!text) return text;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  let key = 0;
+  while ((m = URL_RE.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[1];
+    parts.push(
+      <a
+        key={`u${key++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-rose-300 underline break-all hover:text-rose-200"
+      >
+        {url}
+      </a>
+    );
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 0 ? <>{parts}</> : text;
 };
 
 export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
@@ -1395,7 +1432,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                             : 'bg-slate-950 text-slate-200 border border-slate-800 rounded-bl-none shadow-md'
                         }`}
                       >
-                        {msg.text}
+                        {renderMessageText(msg.text)}
                       </div>
                       <div className="flex items-center gap-1.5 mt-1 px-1">
                         <span className="text-[9px] text-slate-500">{msg.time}</span>
