@@ -54,20 +54,22 @@ export const BROWSER_TOOL_DECLARATIONS: any[] = [
   },
   {
     name: 'browser_click',
-    description: 'Click an element by its snapshot ref.',
+    description:
+      'Click an element by its snapshot ref. Pass ONLY the ref token exactly as shown in brackets (e.g. e40) — never append the element name or text.',
     parameters: {
       type: 'OBJECT',
-      properties: { ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' } },
+      properties: { ref: { type: 'STRING', description: 'The ref token from browser_snapshot, e.g. e40.' } },
       required: ['ref'],
     },
   },
   {
     name: 'browser_type',
-    description: 'Type text into an element by ref.',
+    description:
+      'Type text into an element by ref. Pass ONLY the ref token exactly as shown in brackets (e.g. e40) — never append the element name or text.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' },
+        ref: { type: 'STRING', description: 'The ref token from browser_snapshot, e.g. e40.' },
         text: { type: 'STRING', description: 'Text to type.' },
       },
       required: ['ref', 'text'],

@@ -246,6 +246,7 @@ async function resolveSession(userId: string): Promise<BrowserSession> {
     acceptDownloads: false,
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: false,
+    locale: 'en-US',
   });
   const page = await context.newPage();
   session = { context, page, lastUsedAt: Date.now() };
@@ -379,12 +380,23 @@ export async function browserSnapshot(userId: string): Promise<BrowserActionResu
   }
 }
 
+/** The model sometimes pastes the element name along with the ref
+ * (e.g. "_40:Acceptați tot" or "[ref=e40]"). Strip everything but the token. */
+function cleanRef(raw: string): string {
+  let s = String(raw || '').trim();
+  const m = s.match(/\[ref=([^\]]+)\]/);
+  if (m) s = m[1].trim();
+  const t = s.match(/^[A-Za-z0-9_-]+/);
+  return t ? t[0] : s;
+}
+
 export async function browserClick(userId: string, ref: string): Promise<BrowserActionResult> {
   return withPage(userId, 'click', async (page) => {
     // ref is a [ref=eN] token from browserSnapshot.
-    await page.locator(`aria-ref=${ref}`).first().click({ timeout: 10000 });
+    const clean = cleanRef(ref);
+    await page.locator(`aria-ref=${clean}`).first().click({ timeout: 10000 });
     const { url, title } = await currentUrlAndTitle(page);
-    return { ok: true, message: `Clicked ${ref}.`, url, title: title || undefined };
+    return { ok: true, message: `Clicked ${clean}.`, url, title: title || undefined };
   });
 }
 
@@ -394,7 +406,8 @@ export async function browserType(
   text: string,
 ): Promise<BrowserActionResult> {
   return withPage(userId, 'type', async (page) => {
-    const locator = page.locator(`aria-ref=${ref}`).first();
+    const clean = cleanRef(ref);
+    const locator = page.locator(`aria-ref=${clean}`).first();
     // Safety: refuse credential autofill on password inputs.
     const inputType = await locator
       .evaluate((el) => {
@@ -407,7 +420,7 @@ export async function browserType(
     }
     await locator.fill(text, { timeout: 10000 });
     const { url, title } = await currentUrlAndTitle(page);
-    return { ok: true, message: `Typed into ${ref}.`, url, title: title || undefined };
+    return { ok: true, message: `Typed into ${clean}.`, url, title: title || undefined };
   });
 }
 
