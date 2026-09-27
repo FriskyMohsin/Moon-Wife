@@ -8,4 +8,4 @@
  */
 
 /** "How to get your Gemini API key" tutorial video URL. Empty = "Video coming soon" placeholder state. */
-export const GEMINI_KEY_TUTORIAL_VIDEO_URL: string = '';
+export const GEMINI_KEY_TUTORIAL_VIDEO_URL: string = 'https://youtu.be/cdxq1GCgZP0';
