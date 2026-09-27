@@ -1260,7 +1260,12 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
   };
 
   app.get('/api/hoorvia/client/files', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
-    const files = listUserFiles(req.hoorviaUser!.id).map((m) => ({
+    const userId = req.hoorviaUser!.id;
+    // Drop ghost entries: metadata whose file is missing on disk can't be
+    // downloaded (browser would 404 it as a "file_xxx.json" failure).
+    const files = listUserFiles(userId)
+      .filter((m) => getUserFile(userId, m.id) !== null)
+      .map((m) => ({
       id: m.id,
       filename: m.filename,
       mimeType: m.mimeType,

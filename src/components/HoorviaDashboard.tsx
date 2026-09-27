@@ -1020,6 +1020,33 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     }
   };
 
+  // Download via fetch so a missing/expired file shows a clear in-app error
+  // instead of Chrome's dead "File wasn't available on site" download entry.
+  const handleDownloadFile = async (downloadUrl: string, fallbackName: string) => {
+    setFileError(null);
+    try {
+      const res = await fetch(downloadUrl);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || 'File not found on server — it may have been deleted.');
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const filename = m ? m[1] : fallbackName;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err: any) {
+      setFileError(err.message || 'Download failed.');
+    }
+  };
+
   const handleStudioPack = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!studioTopic.trim() || studioLoading) return;
@@ -2176,13 +2203,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     {fileLoading ? 'Generating…' : 'Generate file'}
                   </button>
                   {fileResult && (
-                    <a
-                      href={fileResult.downloadUrl}
-                      download
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadFile(fileResult.downloadUrl, `file_${fileResult.fileId}`)}
                       className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5"
                     >
                       <Download className="w-3.5 h-3.5" /> Download
-                    </a>
+                    </button>
                   )}
                 </div>
               </form>
@@ -2382,14 +2409,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                             {(f.size / 1024).toFixed(1)} KB · {new Date(f.createdAt).toLocaleDateString()}
                           </p>
                         </div>
-                        <a
-                          href={f.downloadUrl}
-                          download
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadFile(f.downloadUrl, f.filename)}
                           className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
                           title="Download"
                         >
                           <Download className="w-4 h-4" />
-                        </a>
+                        </button>
                       </div>
                     ))}
                   </div>
