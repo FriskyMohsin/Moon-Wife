@@ -25,6 +25,10 @@ import {
   decodedBase64ByteLength,
   extractModelAudioChunks,
 } from './liveAudioProtocol';
+import {
+  BROWSER_TOOL_DECLARATIONS,
+  respondToLiveToolCalls,
+} from './pariBrowserTools';
 
 export function registerHoorviaLiveWs(server: HttpServer) {
   // Legacy hook maintained for compatibility if needed
@@ -180,7 +184,8 @@ export async function handleHoorviaLiveWsConnection(
     `\n\nLive Voice Communication Rules:
 1. Speak in ${publicLang} naturally and fluently.
 2. Keep spoken turns concise, conversational, and direct (1-3 sentences).
-3. Do not output markdown or code blocks in spoken audio mode.`;
+3. Do not output markdown or code blocks in spoken audio mode.
+4. Browser control by voice: if the user asks you to use their private server-side web browser (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo"), use the available browser_* tools to do it, then confirm briefly. Never invent URLs; if the destination is unclear, ask which page to open.`;
 
   const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
@@ -360,6 +365,10 @@ export async function handleHoorviaLiveWsConnection(
               },
             },
             systemInstruction: companionSysPrompt,
+            // Pari AI Phase 2: the same 8 browser_* tools as text chat, shared
+            // via pariBrowserTools so voice commands ("YouTube kholo", ...)
+            // drive the user's private server-side browser too.
+            tools: [{ functionDeclarations: BROWSER_TOOL_DECLARATIONS }],
           },
           callbacks: {
             onmessage: async (message: LiveServerMessage) => {
@@ -367,6 +376,23 @@ export async function handleHoorviaLiveWsConnection(
 
               const msgTypeKeys = Object.keys(message || {}).join(',');
               console.log(`[GEMINI_MESSAGE_RECEIVED] type=${msgTypeKeys}`);
+
+              // Pari AI Phase 2: browser tool calls from voice. The model
+              // decides (e.g. user said "YouTube kholo"); we run each call
+              // against the pariBrowser engine for THIS user only and send
+              // the results back so the model can continue speaking.
+              const liveToolCalls = (message as any)?.toolCall?.functionCalls;
+              if (Array.isArray(liveToolCalls) && liveToolCalls.length > 0) {
+                console.log(
+                  `[LIVE_TOOL_CALL] ${liveToolCalls.length} browser call(s) for user ${userId}: ` +
+                    liveToolCalls.map((c: any) => c?.name).join(', ')
+                );
+                try {
+                  await respondToLiveToolCalls(liveSession, userId, liveToolCalls);
+                } catch (err: any) {
+                  console.error('[Hoorvia Live WS] Browser tool call handling failed:', err?.message || err);
+                }
+              }
 
               if (message.serverContent) {
                 console.log('[GEMINI_SERVER_CONTENT]');

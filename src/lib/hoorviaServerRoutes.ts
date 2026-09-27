@@ -94,20 +94,14 @@ import {
   type PariFileKind,
 } from './pariFiles';
 import { generateImageForUser, buildStudioPack, PariImageAccessError, type StudioPlatform } from './pariStudio';
-import { resolveDataPath } from './runtimePaths';
 import {
   getBrowserSessionStatus,
   ensureBrowserSession,
   closeBrowserSession,
-  browserOpen,
-  browserSnapshot,
-  browserClick,
-  browserType,
-  browserPress,
-  browserYoutube,
   browserScreenshot,
 } from './pariBrowser';
 import { searchVideos, searchArticles } from './contentSearch';
+import { BROWSER_TOOL_DECLARATIONS, executeBrowserTool } from './pariBrowserTools';
 import formidable from 'formidable';
 
 export interface AuthenticatedRequest extends Request {
@@ -830,6 +824,8 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
     // Pari AI Phase 2: browser automation. Pari can drive the user's private
     // server-side browser when they explicitly ask — including in Roman Urdu
     // like "YouTube kholo", "play kar de", "10 second aage kar de".
+    // Browser tool declarations + dispatcher live in pariBrowserTools.ts so
+    // chat and Live Voice share them and cannot drift apart.
     const BROWSER_CONTROL_PROMPT = `
 
 BROWSER CONTROL: You can control the user's private server-side web browser with the available browser_* tools. Use them ONLY when the user explicitly asks for a browser or playback action (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo") — never for general questions or lookups. Never invent URLs; if the destination is unclear, ask the user which page to open. For YouTube: open https://www.youtube.com first (or the exact watch URL the user gave), let the user pick a video, and only then use browser_youtube — it works when a YouTube watch page is already open. Keep tool chatter out of the reply: do the actions, then answer briefly in the user's language.`;
@@ -868,78 +864,9 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
     // call runs the pariBrowser engine for THIS user only; screenshot bytes
     // are saved under data/hoorvia_platform/browser-shots/<userId>/ and the
     // model only ever receives a small JSON result (never raw Buffers).
-    const browserSafeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '');
-    const browserToolDeclarations = [
-      {
-        name: 'browser_open',
-        description: "Open a web page in the user's private server-side browser.",
-        parameters: {
-          type: 'OBJECT',
-          properties: { url: { type: 'STRING', description: 'The full URL to open (https://...).' } },
-          required: ['url'],
-        },
-      },
-      {
-        name: 'browser_snapshot',
-        description: 'Get the accessibility tree of the current page so you can see clickable elements with refs.',
-        parameters: { type: 'OBJECT', properties: {} },
-      },
-      {
-        name: 'browser_click',
-        description: 'Click an element by its snapshot ref.',
-        parameters: {
-          type: 'OBJECT',
-          properties: { ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' } },
-          required: ['ref'],
-        },
-      },
-      {
-        name: 'browser_type',
-        description: 'Type text into an element by ref.',
-        parameters: {
-          type: 'OBJECT',
-          properties: {
-            ref: { type: 'STRING', description: 'The element ref from browser_snapshot.' },
-            text: { type: 'STRING', description: 'Text to type.' },
-          },
-          required: ['ref', 'text'],
-        },
-      },
-      {
-        name: 'browser_press',
-        description: 'Press a keyboard key, e.g. k, j, l, Enter, Tab, Escape.',
-        parameters: {
-          type: 'OBJECT',
-          properties: { key: { type: 'STRING', description: 'The key to press.' } },
-          required: ['key'],
-        },
-      },
-      {
-        name: 'browser_youtube',
-        description:
-          'Control YouTube playback: play, pause, seek_forward_10, seek_back_10, stop. Page must already be a YouTube watch page.',
-        parameters: {
-          type: 'OBJECT',
-          properties: {
-            action: {
-              type: 'STRING',
-              enum: ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'],
-              description: 'The playback action.',
-            },
-          },
-          required: ['action'],
-        },
-      },
-      {
-        name: 'browser_screenshot',
-        description: 'Capture a screenshot of the current page.',
-        parameters: { type: 'OBJECT', properties: {} },
-      },
-      {
-        name: 'browser_close',
-        description: "Close the user's browser session.",
-        parameters: { type: 'OBJECT', properties: {} },
-      },
+    // Browser declarations come from the shared pariBrowserTools module.
+    const browserToolDeclarations: any[] = [
+      ...BROWSER_TOOL_DECLARATIONS,
       {
         name: 'search_videos',
         description:
@@ -975,51 +902,13 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
     const browserToolHandlers = {
       declarations: browserToolDeclarations,
       execute: async (name: string, args: any): Promise<any> => {
+        // Browser tools are shared with Live Voice via pariBrowserTools —
+        // one dispatcher, so chat and voice can never drift apart.
+        if (typeof name === 'string' && name.startsWith('browser_')) {
+          return executeBrowserTool(userId, name, args);
+        }
         try {
           switch (name) {
-            case 'browser_open': {
-              const url = String(args?.url || '');
-              if (!url) return { ok: false, message: 'url is required.' };
-              const r = await browserOpen(userId, url);
-              return { ok: r.ok, message: r.message, url: r.url || undefined, title: r.title || undefined };
-            }
-            case 'browser_snapshot': {
-              const r = await browserSnapshot(userId);
-              return { ok: r.ok, message: r.message, snapshot: (r as any).snapshot };
-            }
-            case 'browser_click': {
-              const r = await browserClick(userId, String(args?.ref || ''));
-              return { ok: r.ok, message: r.message };
-            }
-            case 'browser_type': {
-              // The pariBrowser engine refuses password fields itself;
-              // surface its refusal message to the model unchanged.
-              const r = await browserType(userId, String(args?.ref || ''), String(args?.text || ''));
-              return { ok: r.ok, message: r.message };
-            }
-            case 'browser_press': {
-              const r = await browserPress(userId, String(args?.key || ''));
-              return { ok: r.ok, message: r.message };
-            }
-            case 'browser_youtube': {
-              const action = String(args?.action || '');
-              const valid = ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'] as const;
-              if (!(valid as readonly string[]).includes(action)) {
-                return { ok: false, message: 'Invalid YouTube action. Use play, pause, seek_forward_10, seek_back_10, or stop.' };
-              }
-              const r = await browserYoutube(userId, action as (typeof valid)[number]);
-              return { ok: r.ok, message: r.message };
-            }
-            case 'browser_screenshot': {
-              const png = await browserScreenshot(userId);
-              const relFile = ['browser-shots', browserSafeUserId, `shot-${Date.now()}.png`].join('/');
-              fs.writeFileSync(resolveDataPath('hoorvia_platform', ...relFile.split('/')), png);
-              return { ok: true, message: 'Screenshot saved', file: relFile };
-            }
-            case 'browser_close': {
-              const r = await closeBrowserSession(userId);
-              return { ok: r.ok, message: r.ok ? 'Browser session closed.' : 'No active browser session.' };
-            }
             case 'search_videos': {
               const query = String(args?.query || '').slice(0, 120);
               if (!query.trim()) return { ok: false, message: 'query is required.' };
