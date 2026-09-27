@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  Home,
   MessageSquare,
   Phone,
   ListTodo,
@@ -8,6 +9,7 @@ import {
   FolderOpen,
   BarChart2,
   Settings,
+  Sparkles,
   LogOut,
   Send,
   Mic,
@@ -46,7 +48,7 @@ import { subscribePush, unsubscribePush, isPushSubscribed } from '../lib/pwaClie
 
 const CLIENT_API = '/api/hoorvia/client';
 
-type TabId = 'chat' | 'voice' | 'tasks' | 'reminders' | 'memory' | 'files' | 'usage' | 'settings';
+type TabId = 'home' | 'chat' | 'voice' | 'tasks' | 'reminders' | 'memory' | 'files' | 'usage' | 'settings';
 
 interface TaskItem {
   id: string;
@@ -146,7 +148,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   onLogout,
   onOpenOwnerAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabId>('chat');
+  const [activeTab, setActiveTab] = useState<TabId>('home');
 
   const [companion, setCompanion] = useState<CompanionProfile>(() => ({
     ...initialCompanion,
@@ -590,6 +592,10 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   }, [token]);
 
   useEffect(() => {
+    if (activeTab === 'home') {
+      fetchTasks().then((list) => fetchReminders(list));
+      fetchClientUsage();
+    }
     if (activeTab === 'chat' && !threadLoaded) fetchThread();
     if (activeTab === 'tasks') fetchTasks();
     if (activeTab === 'reminders') {
@@ -1259,6 +1265,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   // ---------- Shared render helpers ----------
 
   const NAV_ITEMS: { id: TabId; label: string; icon: any }[] = [
+    { id: 'home', label: 'Home', icon: Home },
     { id: 'chat', label: 'Chat', icon: MessageSquare },
     { id: 'voice', label: 'Voice Call', icon: Phone },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
@@ -1456,6 +1463,133 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
       {/* Main Content Area */}
       <main className="flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full min-h-screen">
+        {/* ================= TAB: HOME ================= */}
+        {activeTab === 'home' && (() => {
+          const hour = new Date().getHours();
+          const greeting =
+            hour < 5 ? 'Working late' :
+            hour < 12 ? 'Good morning' :
+            hour < 17 ? 'Good afternoon' :
+            hour < 21 ? 'Good evening' : 'Good night';
+          const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          const pendingTasks = tasks.filter((t) => t.status !== 'done');
+          const quickActions: { id: string; label: string; desc: string; icon: any; tab: TabId }[] = [
+            { id: 'qa-chat', label: 'Chat with Pari', desc: 'Ask anything, anytime', icon: MessageSquare, tab: 'chat' },
+            { id: 'qa-voice', label: 'Voice Call', desc: 'Talk to Pari live', icon: Phone, tab: 'voice' },
+            { id: 'qa-tasks', label: 'New Task', desc: 'Plan your day', icon: ListTodo, tab: 'tasks' },
+            { id: 'qa-reminders', label: 'New Reminder', desc: 'Never miss a thing', icon: Bell, tab: 'reminders' },
+            { id: 'qa-files', label: 'Files & Studio', desc: 'Create & download files', icon: FolderOpen, tab: 'files' },
+            { id: 'qa-memory', label: 'Memory', desc: 'What Pari remembers', icon: Brain, tab: 'memory' },
+          ];
+          const stats = [
+            { label: 'Chats today', value: clientUsage ? `${clientUsage.today.chat}/${clientUsage.limits.chat.perDay}` : '—' },
+            { label: 'Voice minutes', value: clientUsage ? `${clientUsage.today.liveMinutes}/${clientUsage.limits.liveMinutes.perDay}` : '—' },
+            { label: 'Pending tasks', value: String(pendingTasks.length) },
+            { label: 'Reminders', value: String(reminders.length) },
+          ];
+          return (
+            <div className="animate-fadeIn space-y-6">
+              {/* Hero */}
+              <div className="rounded-3xl border border-rose-950/60 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-rose-950/30 p-6 md:p-8 shadow-2xl">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-rose-600 to-purple-600 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
+                    P
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xl md:text-2xl font-bold text-white truncate">
+                      {greeting}, {user.name?.split(' ')[0] || 'there'} <span className="text-rose-400">👋</span>
+                    </div>
+                    <div className="text-sm text-slate-400">{todayStr} · Pari is here for you</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('chat')}
+                  className="mt-5 inline-flex items-center gap-2 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-semibold px-6 py-3 rounded-2xl shadow-lg transition"
+                >
+                  <Sparkles className="w-5 h-5" /> Say hi to Pari
+                </button>
+              </div>
+
+              {/* Quick actions */}
+              <div>
+                <div className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Quick actions</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {quickActions.map((qa) => (
+                    <button
+                      key={qa.id}
+                      onClick={() => setActiveTab(qa.tab)}
+                      className="text-left p-4 rounded-2xl border border-slate-800 bg-slate-900/60 hover:border-rose-800/60 hover:bg-slate-900 transition group"
+                    >
+                      <qa.icon className="w-6 h-6 text-rose-400 mb-2 group-hover:scale-110 transition" />
+                      <div className="font-semibold text-white text-sm">{qa.label}</div>
+                      <div className="text-xs text-slate-400">{qa.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Today at a glance */}
+              <div>
+                <div className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Today at a glance</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {stats.map((s) => (
+                    <div key={s.label} className="p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
+                      <div className="text-2xl font-bold text-white">{s.value}</div>
+                      <div className="text-xs text-slate-400 mt-1">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Up next */}
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-semibold text-white">Pending tasks</div>
+                    <button onClick={() => setActiveTab('tasks')} className="text-xs text-rose-400 font-semibold hover:underline">
+                      View all
+                    </button>
+                  </div>
+                  {pendingTasks.length === 0 ? (
+                    <div className="text-sm text-slate-500">All clear — no pending tasks. 🎉</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {pendingTasks.slice(0, 3).map((t) => (
+                        <div key={t.id} className="flex items-center gap-2 text-sm">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${PRIORITY_STYLE[t.priority] || PRIORITY_STYLE.low}`}>
+                            {t.priority.toUpperCase()}
+                          </span>
+                          <span className="text-slate-200 truncate">{t.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-semibold text-white">Upcoming reminders</div>
+                    <button onClick={() => setActiveTab('reminders')} className="text-xs text-rose-400 font-semibold hover:underline">
+                      View all
+                    </button>
+                  </div>
+                  {reminders.length === 0 ? (
+                    <div className="text-sm text-slate-500">No reminders set yet.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {reminders.slice(0, 3).map((r) => (
+                        <div key={r.id} className="flex items-center gap-2 text-sm">
+                          <Bell className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span className="text-slate-200 truncate">{r.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ================= TAB: CHAT ================= */}
         {activeTab === 'chat' && (() => {
           const chatLangObj = getLanguageByCodeOrName(companion.language || 'English');
