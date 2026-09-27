@@ -109,6 +109,52 @@ const fmtTime = (ts?: string | number | Date) => {
   }
 };
 
+// Pari AI: deterministic starfield for the cosmic background (mockup-faithful neon space)
+const STARS: { left: number; top: number; size: number; color: string; o: number; d: number }[] =
+  Array.from({ length: 130 }, (_, i) => {
+    const r = (seed: number) => {
+      const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    return {
+      left: r(1) * 100,
+      top: r(2) * 100,
+      size: 1 + Math.floor(r(3) * 2.4),
+      color: ['#ffffff', '#ffd6ec', '#bfe9ff', '#f5c2ff'][Math.floor(r(4) * 4)],
+      o: 0.3 + r(5) * 0.6,
+      d: r(6) * 4,
+    };
+  });
+
+function CosmicBackground() {
+  return (
+    <div className="cosmic-bg" aria-hidden="true">
+      <div className="nebula nebula-a" />
+      <div className="nebula nebula-b" />
+      <div className="nebula nebula-c" />
+      <div className="nebula nebula-d" />
+      {STARS.map((s, i) => (
+        <span
+          key={i}
+          className="star"
+          style={{
+            left: `${s.left}%`,
+            top: `${s.top}%`,
+            width: s.size,
+            height: s.size,
+            background: s.color,
+            opacity: s.o,
+            animationDelay: `${s.d}s`,
+            boxShadow: `0 0 ${s.size * 3}px ${s.color}`,
+          }}
+        />
+      ))}
+      <div className="horizon" />
+      <div className="vignette" />
+    </div>
+  );
+}
+
 // Pari AI: render chat text with clickable links (video/article cards the
 // model emits as 🎥/📄 blocks, plus any plain URLs). Plain-text safe: no HTML
 // injection — only the URL itself becomes an anchor.
@@ -1361,8 +1407,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
   return (
     <div className="min-h-screen text-slate-100 flex flex-col md:flex-row font-sans selection:bg-fuchsia-500/40 overflow-x-hidden">
+      <CosmicBackground />
       {/* Sidebar Navigation */}
-      <aside className="w-full md:w-64 md:h-screen md:sticky md:top-0 md:overflow-y-auto bg-[#08061a]/70 backdrop-blur-xl border-r border-fuchsia-500/20 p-4 flex flex-col justify-between shrink-0 shadow-[0_0_50px_rgba(192,38,211,0.10)]">
+      <aside className="pari-frame relative z-10 md:w-64 m-3 md:m-4 rounded-3xl md:h-[calc(100vh-2rem)] md:sticky md:top-4 md:overflow-y-auto p-4 flex flex-col justify-between shrink-0">
         <div>
           <div className="mb-5 pb-3 border-b border-fuchsia-500/20 px-1">
             <PariBrand size="sm" />
@@ -1462,7 +1509,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full min-h-screen">
+      <main className="relative z-10 flex-1 p-6 md:p-8 max-w-5xl mx-auto w-full min-h-screen">
         {/* ================= TAB: HOME ================= */}
         {activeTab === 'home' && (() => {
           const hour = new Date().getHours();
@@ -1690,7 +1737,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
                     >
                       <div
-                        className={`max-w-lg px-4 py-3 rounded-2xl text-xs leading-relaxed ${
+                        className={`pari-bubble max-w-lg px-4 py-3 rounded-2xl text-xs leading-relaxed ${
                           msg.sender === 'user'
                             ? 'bg-pink-500 text-white rounded-br-none shadow-md'
                             : 'bg-slate-950 text-slate-200 border border-fuchsia-500/15 rounded-bl-none shadow-md'
