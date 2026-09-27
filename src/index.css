@@ -106,7 +106,7 @@ body {
   background-color: #030109;
 }
 
-/* ---- Cosmic background layer: starfield + nebula + neon horizon + vignette ---- */
+/* ---- Cosmic background layer: generated neon space photo + shade + starfield + vignette ---- */
 .cosmic-bg {
   position: fixed;
   inset: 0;
@@ -115,26 +115,17 @@ body {
   pointer-events: none;
   background: #070321;
 }
-.cosmic-bg .nebula {
+.cosmic-bg .bg-photo {
   position: absolute;
-  border-radius: 9999px;
-  filter: blur(58px);
+  inset: 0;
+  background: url(/cosmic-bg.jpg) center 30% / cover no-repeat;
 }
-.cosmic-bg .nebula-a {
-  width: 54vw; height: 54vw; left: -14vw; top: -16vw;
-  background: radial-gradient(circle, rgba(255, 45, 150, 0.52), transparent 70%);
-}
-.cosmic-bg .nebula-b {
-  width: 48vw; height: 48vw; right: -12vw; top: 4vh;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.60), transparent 70%);
-}
-.cosmic-bg .nebula-c {
-  width: 42vw; height: 42vw; left: 28vw; top: 36vh;
-  background: radial-gradient(circle, rgba(236, 72, 153, 0.34), transparent 70%);
-}
-.cosmic-bg .nebula-d {
-  width: 58vw; height: 36vw; left: 6vw; bottom: -14vw;
-  background: radial-gradient(circle, rgba(34, 211, 238, 0.32), transparent 70%);
+.cosmic-bg .bg-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 38%, rgba(6, 2, 20, 0.30) 0%, rgba(6, 2, 20, 0.62) 78%, rgba(4, 1, 14, 0.78) 100%),
+    linear-gradient(180deg, rgba(6, 2, 20, 0.42) 0%, transparent 26%, transparent 62%, rgba(6, 2, 20, 0.50) 100%);
 }
 .cosmic-bg .star {
   position: absolute;
@@ -144,19 +135,6 @@ body {
 @keyframes star-twinkle {
   0%, 100% { opacity: 0.25; }
   50% { opacity: 0.95; }
-}
-.cosmic-bg .horizon {
-  position: absolute;
-  left: -10%; right: -10%; bottom: -6%;
-  height: 38vh;
-  background:
-    linear-gradient(to top, rgba(255, 45, 150, 0.30), rgba(139, 92, 246, 0.14) 45%, transparent 75%),
-    repeating-linear-gradient(to right, rgba(255, 45, 150, 0.22) 0 2px, transparent 2px 64px),
-    repeating-linear-gradient(to top, rgba(34, 211, 238, 0.14) 0 1px, transparent 1px 34px);
-  transform: perspective(700px) rotateX(58deg);
-  transform-origin: bottom center;
-  -webkit-mask-image: linear-gradient(to top, #000 25%, transparent 92%);
-  mask-image: linear-gradient(to top, #000 25%, transparent 92%);
 }
 .cosmic-bg .vignette {
   position: absolute;

@@ -129,10 +129,8 @@ const STARS: { left: number; top: number; size: number; color: string; o: number
 function CosmicBackground() {
   return (
     <div className="cosmic-bg" aria-hidden="true">
-      <div className="nebula nebula-a" />
-      <div className="nebula nebula-b" />
-      <div className="nebula nebula-c" />
-      <div className="nebula nebula-d" />
+      <div className="bg-photo" />
+      <div className="bg-shade" />
       {STARS.map((s, i) => (
         <span
           key={i}
@@ -149,7 +147,6 @@ function CosmicBackground() {
           }}
         />
       ))}
-      <div className="horizon" />
       <div className="vignette" />
     </div>
   );
