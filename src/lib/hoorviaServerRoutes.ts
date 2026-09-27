@@ -99,8 +99,10 @@ import {
   getBrowserSessionStatus,
   ensureBrowserSession,
   closeBrowserSession,
+  browserOpen,
   browserScreenshot,
 } from './pariBrowser';
+import { execSync } from 'child_process';
 import { searchVideos, searchArticles } from './contentSearch';
 import { BROWSER_TOOL_DECLARATIONS, executeBrowserTool } from './pariBrowserTools';
 import formidable from 'formidable';
@@ -1483,6 +1485,30 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
     } catch (err: any) {
       console.error('[PariAI] browser screenshot failed:', err?.message || err);
       res.status(500).json({ error: 'Could not capture a screenshot.' });
+    }
+  });
+
+  // --- Browser self-test: one click proves which code is live, whether the
+  // --- browser is headed, and that YouTube really opens (with screenshot).
+  app.get('/api/hoorvia/client/browser/selftest', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const userId = req.hoorviaUser!.id;
+    const headlessEnv = process.env.PARI_BROWSER_HEADLESS;
+    const headlessEffective = headlessEnv !== 'false';
+    let commit = 'unknown';
+    try {
+      commit = execSync('git rev-parse --short HEAD', { cwd: process.cwd(), timeout: 8000 }).toString().trim() || 'unknown';
+    } catch (_) { /* not a git checkout — leave as unknown */ }
+    const base = { commit, headlessEnv: headlessEnv ?? '(not set)', headlessEffective };
+    try {
+      const opened = await browserOpen(userId, 'https://www.youtube.com');
+      if (!opened.ok) {
+        return res.json({ ...base, ok: false, step: 'open', error: opened.message });
+      }
+      const png = await browserScreenshot(userId);
+      return res.json({ ...base, ok: true, screenshot: `data:image/png;base64,${png.toString('base64')}` });
+    } catch (err: any) {
+      console.error('[PariAI] browser selftest failed:', err?.message || err);
+      return res.json({ ...base, ok: false, step: 'launch', error: err?.message || String(err) });
     }
   });
 

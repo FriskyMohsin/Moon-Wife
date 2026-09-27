@@ -233,6 +233,19 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const [pushBusy, setPushBusy] = useState<boolean>(false);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
 
+  // Browser self-test state (one click proves which server code is live,
+  // whether the browser is headed, and that YouTube really opens)
+  const [browserTestLoading, setBrowserTestLoading] = useState<boolean>(false);
+  const [browserTest, setBrowserTest] = useState<{
+    ok: boolean;
+    commit: string;
+    headlessEnv: string;
+    headlessEffective: boolean;
+    step?: string;
+    error?: string;
+    screenshot?: string;
+  } | null>(null);
+
   // Live Voice state & engine (existing GeminiLiveAudioManager + /api/hoorvia/live-ws infra)
   type LiveSessionState = 'IDLE' | 'REQUESTING_MIC' | 'CONNECTING' | 'LISTENING' | 'SPEAKING' | 'ERROR';
   const [liveState, setLiveState] = useState<LiveSessionState>('IDLE');
@@ -1047,10 +1060,24 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     }
   };
 
+  const handleBrowserSelfTest = async () => {
+    if (browserTestLoading) return;
+    setBrowserTestLoading(true);
+    setBrowserTest(null);
+    try {
+      const res = await fetch('/api/hoorvia/client/browser/selftest');
+      const data = await res.json();
+      setBrowserTest(data);
+    } catch (err: any) {
+      setBrowserTest({ ok: false, commit: 'unknown', headlessEnv: 'unknown', headlessEffective: true, step: 'request', error: err.message || 'Self-test request failed.' });
+    } finally {
+      setBrowserTestLoading(false);
+    }
+  };
+
   const handleStudioPack = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!studioTopic.trim() || studioLoading) return;
-    setStudioLoading(true);
+    if (!studioTopic.trim() || studioLoading) return;    setStudioLoading(true);
     setStudioError(null);
     setStudioResult(null);
     try {
@@ -2474,6 +2501,41 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             <div className="border-b border-slate-800 pb-4">
               <h2 className="text-2xl font-bold text-white">Settings</h2>
               <p className="text-xs text-slate-400 mt-1">Your companion, language, voice, AI keys, and notifications.</p>
+            </div>
+
+            {/* Browser self-test — one click proves which server code is live,
+                whether the browser window is visible, and that YouTube opens */}
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-3">
+              <h3 className="text-sm font-bold text-white">Browser self-test</h3>
+              <p className="text-[11px] text-slate-500">
+                Opens YouTube in the server browser and shows you exactly which code is running.
+                If the browser is in visible mode, its window pops up on this machine too.
+              </p>
+              <button
+                type="button"
+                onClick={handleBrowserSelfTest}
+                disabled={browserTestLoading}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {browserTestLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                {browserTestLoading ? 'Testing…' : 'Run browser test'}
+              </button>
+              {browserTest && (
+                <div className="space-y-2 text-xs">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-400">
+                    <span>Server commit: <span className="text-white font-mono">{browserTest.commit}</span></span>
+                    <span>Visible window: <span className={browserTest.headlessEffective ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>{browserTest.headlessEffective ? 'OFF (headless)' : 'ON'}</span></span>
+                  </div>
+                  {browserTest.ok ? (
+                    <p className="text-emerald-400 font-semibold">YouTube opened successfully.</p>
+                  ) : (
+                    <p className="text-red-400 font-semibold">Failed{browserTest.step ? ` at step: ${browserTest.step}` : ''} — {browserTest.error || 'unknown error'}</p>
+                  )}
+                  {browserTest.screenshot && (
+                    <img src={browserTest.screenshot} alt="Browser screenshot" className="rounded-xl border border-slate-800 w-full" />
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Companion identity */}
