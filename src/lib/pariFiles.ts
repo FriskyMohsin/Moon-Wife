@@ -15,9 +15,9 @@ import os from 'os';
 import path from 'path';
 import pptxgen from 'pptxgenjs';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
-import PDFDocument = require('pdfkit');
-import ExcelJS = require('exceljs');
-import EPub = require('epub-gen');
+import PDFDocument from 'pdfkit';
+import ExcelJS from 'exceljs';
+import EPub from 'epub-gen';
 import { resolveDataPath } from './runtimePaths';
 import { generateTextWithUserKey, extractJsonPayload, pariLoad, pariSave, pariId } from './pariStore';
 
