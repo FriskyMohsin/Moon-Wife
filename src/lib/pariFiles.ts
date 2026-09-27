@@ -24,7 +24,20 @@ import { generateTextWithUserKey, extractJsonPayload, pariLoad, pariSave, pariId
 export const MANUSCRIPT_NOTICE =
   'Manuscript — not a publish-ready illustrated book. Generated with Pari AI as a drafting aid; edit, illustrate, and design before publishing.';
 
-export type PariFileKind = 'pptx' | 'docx' | 'pdf' | 'epub' | 'xlsx' | 'png';
+export type PariFileKind =
+  | 'pptx'
+  | 'docx'
+  | 'pdf'
+  | 'epub'
+  | 'xlsx'
+  | 'png'
+  | 'jpg'
+  | 'jpeg'
+  | 'webp'
+  | 'gif'
+  | 'txt'
+  | 'md'
+  | 'csv';
 
 export interface PariFileMeta {
   id: string;
@@ -61,6 +74,11 @@ function slugify(title: string): string {
   );
 }
 
+/** Public: sanitize a client-supplied filename stem (never trust it for paths). */
+export function slugifyFilenameStem(stem: string): string {
+  return slugify(stem);
+}
+
 /** Persist a generated binary under the user's own folder. */
 export function saveUserFile(
   userId: string,
@@ -95,6 +113,13 @@ export function getUserFile(userId: string, fileId: string): { meta: PariFileMet
   const absPath = path.join(safeUserDir(userId), meta.filename);
   if (!fs.existsSync(absPath)) return null;
   return { meta, absPath };
+}
+
+/** List all files owned by a user, newest first. */
+export function listUserFiles(userId: string): PariFileMeta[] {
+  return loadMeta()
+    .filter((m) => m.userId === userId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,8 @@ import { listModelKeys, saveModelKey, deleteModelKey, resolveModelKeyForUser } f
 import {
   saveUserFile,
   getUserFile,
+  listUserFiles,
+  slugifyFilenameStem,
   buildPptx,
   buildDocx,
   buildPdf,
@@ -106,6 +108,7 @@ import {
   browserScreenshot,
 } from './pariBrowser';
 import { searchVideos, searchArticles } from './contentSearch';
+import formidable from 'formidable';
 
 export interface AuthenticatedRequest extends Request {
   hoorviaUser?: {
@@ -1338,6 +1341,107 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
   app.post('/api/hoorvia/client/files/xlsx', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     const { title, topic, sheets } = req.body || {};
     await handlePariFileBuild(req, res, 'xlsx', (apiKey, model) => buildXlsx(apiKey, model, { title, topic, sheets }));
+  });
+
+  // --- Client file library (uploads + generated, strictly per-user) ---
+  const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+  const UPLOAD_ALLOWLIST: Record<string, { mime: string; kind: PariFileKind }> = {
+    pdf: { mime: 'application/pdf', kind: 'pdf' },
+    docx: {
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      kind: 'docx',
+    },
+    xlsx: {
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      kind: 'xlsx',
+    },
+    pptx: {
+      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      kind: 'pptx',
+    },
+    txt: { mime: 'text/plain', kind: 'txt' },
+    md: { mime: 'text/markdown', kind: 'md' },
+    csv: { mime: 'text/csv', kind: 'csv' },
+    png: { mime: 'image/png', kind: 'png' },
+    jpg: { mime: 'image/jpeg', kind: 'jpg' },
+    jpeg: { mime: 'image/jpeg', kind: 'jpeg' },
+    webp: { mime: 'image/webp', kind: 'webp' },
+    gif: { mime: 'image/gif', kind: 'gif' },
+  };
+
+  app.get('/api/hoorvia/client/files', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const files = listUserFiles(req.hoorviaUser!.id).map((m) => ({
+      id: m.id,
+      filename: m.filename,
+      mimeType: m.mimeType,
+      size: m.size,
+      kind: m.kind,
+      createdAt: m.createdAt,
+      downloadUrl: `/api/hoorvia/client/files/${m.id}`,
+    }));
+    res.json({ files });
+  });
+
+  app.post('/api/hoorvia/client/files/upload', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    // Quota first (uploads share the Files 10/day, 50/week quota with generations).
+    if (!enforcePariUsage(res, req.hoorviaUser!.id, 'file')) return;
+    let parsed: { files: formidable.Files };
+    try {
+      const form = formidable({
+        maxFiles: 1,
+        maxFileSize: UPLOAD_MAX_BYTES,
+        maxTotalFileSize: UPLOAD_MAX_BYTES,
+      });
+      const [, files] = await form.parse(req);
+      parsed = { files };
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (err?.code === 1009 || /maxFileSize/i.test(msg)) {
+        return res.status(413).json({ error: 'File is too large. Maximum upload size is 25MB.' });
+      }
+      return res.status(400).json({ error: 'Could not read the uploaded file.' });
+    }
+    const raw = parsed.files.file;
+    const uploaded = Array.isArray(raw) ? raw[0] : raw;
+    if (!uploaded || !uploaded.filepath) {
+      return res.status(400).json({ error: 'No file was uploaded.' });
+    }
+    // Validate extension from the client filename (never trust it for the path).
+    const originalName = path.basename(uploaded.originalFilename || '');
+    const dot = originalName.lastIndexOf('.');
+    const ext = dot > 0 ? originalName.slice(dot + 1).toLowerCase() : '';
+    const allowed = UPLOAD_ALLOWLIST[ext];
+    if (!allowed) {
+      try {
+        fs.unlinkSync(uploaded.filepath);
+      } catch (_) {}
+      return res.status(400).json({
+        error: 'File type not allowed. Allowed: pdf, docx, xlsx, pptx, txt, md, csv, png, jpg, webp, gif.',
+      });
+    }
+    const safeName = `${slugifyFilenameStem(originalName.slice(0, dot))}.${ext}`;
+    try {
+      const buffer = fs.readFileSync(uploaded.filepath);
+      try {
+        fs.unlinkSync(uploaded.filepath);
+      } catch (_) {}
+      if (buffer.length === 0) {
+        return res.status(400).json({ error: 'The uploaded file is empty.' });
+      }
+      const meta = saveUserFile(req.hoorviaUser!.id, safeName, buffer, allowed.mime, allowed.kind);
+      recordPariUsage(req.hoorviaUser!.id, 'file');
+      recordUserUsage(req.hoorviaUser!.id, false, 0);
+      res.json({
+        status: 'ok',
+        id: meta.id,
+        filename: meta.filename,
+        size: meta.size,
+        downloadUrl: `/api/hoorvia/client/files/${meta.id}`,
+      });
+    } catch (err: any) {
+      console.error('[PariAI] file upload failed:', err?.message || err);
+      res.status(500).json({ error: 'Failed to store the uploaded file.' });
+    }
   });
 
   app.get('/api/hoorvia/client/files/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {

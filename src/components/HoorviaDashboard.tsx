@@ -33,6 +33,7 @@ import {
   FileText,
   ChevronRight,
   Video,
+  Upload,
 } from 'lucide-react';
 import { GeminiLiveAudioManager } from '../lib/audioManager';
 import { CompanionProfile, CompanionVoice, CompanionTone, isMohsinMaryam } from '../lib/hoorviaTypes';
@@ -202,6 +203,25 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const [studioLoading, setStudioLoading] = useState<boolean>(false);
   const [studioResult, setStudioResult] = useState<{ imageUrl: string; caption: string; hashtags: string } | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
+
+  // File upload state
+  interface MyFileItem {
+    id: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+    kind: string;
+    createdAt: string;
+    downloadUrl: string;
+  }
+  const [myFiles, setMyFiles] = useState<MyFileItem[]>([]);
+  const [myFilesLoading, setMyFilesLoading] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadLoading, setUploadLoading] = useState<boolean>(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<{ filename: string; downloadUrl: string } | null>(null);
+  const [dragOver, setDragOver] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Settings state
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
@@ -1040,6 +1060,62 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
       setStudioLoading(false);
     }
   };
+
+  // ---------- Files: upload a reference file ----------
+  const loadMyFiles = async () => {
+    setMyFilesLoading(true);
+    try {
+      const res = await fetch(`${CLIENT_API}/files`, { headers: authHeaders(token) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.files)) setMyFiles(data.files);
+    } catch {}
+    setMyFilesLoading(false);
+  };
+
+  const uploadReferenceFile = (file: File | undefined | null) => {
+    if (!file || uploadLoading) return;
+    setUploadLoading(true);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadProgress(0);
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${CLIENT_API}/files/upload`);
+    xhr.setRequestHeader('X-Hoorvia-Token', token);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      setUploadLoading(false);
+      let data: any = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {}
+      if (xhr.status === 429) {
+        setUploadError('Daily file limit reached — try again tomorrow.');
+        return;
+      }
+      if (xhr.status !== 200 || data.error || !data.downloadUrl) {
+        setUploadError(data.error || 'Upload failed.');
+        return;
+      }
+      setUploadProgress(100);
+      setUploadResult({ filename: data.filename, downloadUrl: data.downloadUrl });
+      loadMyFiles();
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    xhr.onerror = () => {
+      setUploadLoading(false);
+      setUploadError('Upload failed — check your connection and try again.');
+    };
+    xhr.send(formData);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'files') loadMyFiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -2200,6 +2276,125 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 )}
               </form>
               <p className="text-[11px] text-slate-500">Content Studio makes images and post copy. Video generation is not available yet.</p>
+            </div>
+
+            {/* (c) Upload a reference file */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Upload className="w-4 h-4 text-rose-400" /> Upload a reference file
+              </h3>
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  uploadReferenceFile(e.dataTransfer.files?.[0]);
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-8 rounded-2xl border-2 border-dashed text-center cursor-pointer transition-colors ${
+                  dragOver
+                    ? 'border-rose-500 bg-rose-950/30'
+                    : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif"
+                  onChange={(e) => uploadReferenceFile(e.target.files?.[0])}
+                />
+                {uploadLoading ? (
+                  <div className="space-y-3">
+                    <Loader2 className="w-6 h-6 animate-spin text-rose-400 mx-auto" />
+                    <p className="text-xs text-slate-300 font-semibold">Uploading… {uploadProgress}%</p>
+                    <div className="w-full max-w-xs mx-auto h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-rose-500 rounded-full transition-all"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Upload className="w-6 h-6 text-slate-500 mx-auto" />
+                    <p className="text-xs text-slate-300 font-semibold">
+                      Drop a file here, or <span className="text-rose-400 underline">browse</span>
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      pdf, docx, xlsx, pptx, txt, md, csv, png, jpg, webp, gif — max 25MB
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {uploadError && (
+                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300">
+                  {uploadError}
+                </div>
+              )}
+              {uploadResult && (
+                <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-800/60 text-xs text-emerald-300 flex items-center justify-between gap-3">
+                  <span className="truncate">Uploaded: {uploadResult.filename}</span>
+                  <a
+                    href={uploadResult.downloadUrl}
+                    download
+                    className="shrink-0 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold flex items-center gap-1"
+                  >
+                    <Download className="w-3 h-3" /> Download
+                  </a>
+                </div>
+              )}
+
+              {/* (d) My files */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">My files</h4>
+                  <button
+                    type="button"
+                    onClick={loadMyFiles}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                    title="Refresh"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${myFilesLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                {myFilesLoading && myFiles.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">Loading files…</p>
+                ) : myFiles.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4 text-center border border-slate-800 rounded-xl">
+                    No files yet — generate one above or upload a reference file.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {myFiles.map((f) => (
+                      <div
+                        key={f.id}
+                        className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs text-white font-semibold truncate">{f.filename}</p>
+                          <p className="text-[11px] text-slate-500">
+                            {(f.size / 1024).toFixed(1)} KB · {new Date(f.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <a
+                          href={f.downloadUrl}
+                          download
+                          className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                          title="Download"
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
