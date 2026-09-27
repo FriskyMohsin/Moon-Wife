@@ -24,6 +24,7 @@ import { CompanionVoice } from '../lib/hoorviaTypes';
 import { HOORVIA_VOICES, playVoiceSample } from '../lib/voicePreview';
 import { SearchableLanguagePicker } from './SearchableLanguagePicker';
 import { PariBrand } from './PariBrand';
+import { GEMINI_KEY_TUTORIAL_VIDEO_URL } from '../lib/pariConfig';
 
 interface HoorviaLandingProps {
   onLoginSuccess: (data: { token: string; user: any; companion: any }) => void;
@@ -592,6 +593,17 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
                 placeholder="AIzaSy... (Paste Google Gemini API Key)"
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
               />
+              {GEMINI_KEY_TUTORIAL_VIDEO_URL ? (
+                <a
+                  href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-[11px] text-rose-300 hover:text-rose-200 font-medium"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  How to get your Gemini API key? Watch the tutorial
+                </a>
+              ) : null}
             </div>
 
             <div className="flex items-center justify-between pt-2">
