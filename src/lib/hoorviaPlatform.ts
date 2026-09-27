@@ -2325,10 +2325,14 @@ export async function executeHoorviaUserChatWithFailover(
   apiKey: string,
   fullSystemPrompt: string,
   formattedHistory: any[],
-  companionName: string
+  companionName: string,
+  modelOverride?: string
 ): Promise<ChatExecutionResult> {
   const cred = getEncryptedCredential(userId);
-  const initialModel = cred?.selectedModel || 'gemini-2.0-flash';
+  // Pari AI: an explicit model (e.g. per-model BYOK routing) wins over the
+  // stored selectedModel. The failover candidates still derive from the
+  // user's discovered models.
+  const initialModel = modelOverride || cred?.selectedModel || 'gemini-2.0-flash';
   const availableModels = cred?.availableModels || [];
 
   // Build candidate model list prioritizing user's confirmed compatible models
@@ -2372,8 +2376,10 @@ export async function executeHoorviaUserChatWithFailover(
         const replyText = response.text || 'I am here with you.';
         const isFailover = currentModel !== initialModel;
 
-        // If failover occurred and succeeded, update user's selectedModel in storage
-        if (isFailover) {
+        // If failover occurred and succeeded, update user's selectedModel in storage.
+        // Pari AI: skip this when the caller forced a model override — an
+        // override must not silently become the user's default model.
+        if (isFailover && !modelOverride) {
           const creds = loadJsonData<EncryptedCredential[]>('credentials.json', []);
           const idx = creds.findIndex((c) => c.userId === userId && c.provider === 'gemini');
           if (idx >= 0) {

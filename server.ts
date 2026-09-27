@@ -55,6 +55,7 @@ import {
   completeCommitment,
 } from './src/lib/proactiveManager';
 import { registerHoorviaRoutes } from './src/lib/hoorviaServerRoutes';
+import { startPariReminderScheduler } from './src/lib/pariScheduler';
 import { registerHoorviaLiveWs, handleHoorviaLiveWsConnection } from './src/lib/hoorviaLiveWs';
 import { normalizeVisionImageMimeType } from './src/lib/visionPayload';
 import { createLiveVisionInput } from './src/lib/liveVisionProtocol';
@@ -6483,6 +6484,7 @@ async function setupVite() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Maryam server running on http://0.0.0.0:${PORT}`);
     startTaskScheduler(30000);
+    startPariReminderScheduler();
   });
 }
 

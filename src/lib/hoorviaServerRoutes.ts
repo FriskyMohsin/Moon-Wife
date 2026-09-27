@@ -1,4 +1,4 @@
-import { Express, Request, Response, NextFunction } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -58,6 +58,37 @@ import {
   applyUserAccessPack,
   updatePlatformDefaultCapability,
 } from './hoorviaPlatform';
+
+// --- Pari AI client-panel modules ---
+import { appendPariThreadMessage, getPariThread, getPariThreadHistoryForModel } from './pariThreads';
+import { checkPariUsage, enforcePariUsage, recordPariUsage, getPariUsageSummary } from './pariUsage';
+import { extractAndStoreMemories } from './pariMemory';
+import {
+  listClientTasks,
+  createClientTask,
+  updateClientTask,
+  deleteClientTask,
+  extractTaskFromMessage,
+} from './pariTasks';
+import {
+  listClientReminders,
+  createClientReminder,
+  updateClientReminder,
+  deleteClientReminder,
+} from './pariScheduler';
+import { getOrCreateVapidPublicKey, savePushSubscription, removePushSubscription } from './pariPush';
+import { listModelKeys, saveModelKey, deleteModelKey, resolveModelKeyForUser } from './pariRouter';
+import {
+  saveUserFile,
+  getUserFile,
+  buildPptx,
+  buildDocx,
+  buildPdf,
+  buildEpub,
+  buildXlsx,
+  type PariFileKind,
+} from './pariFiles';
+import { generateImageForUser, buildStudioPack, PariImageAccessError, type StudioPlatform } from './pariStudio';
 
 export interface AuthenticatedRequest extends Request {
   hoorviaUser?: {
@@ -225,16 +256,16 @@ export function registerHoorviaRoutes(app: Express) {
       return res.status(500).json({ error: 'Failed to securely encrypt and store API key.' });
     }
 
-    // Auto create default companion profile
+    // Auto create default companion profile (Pari AI brand)
     const defaultProfile = saveCompanionProfile(result.user.id, {
-      name: 'Aria',
-      type: 'girlfriend',
+      name: 'Pari AI',
+      type: 'companion',
       gender: 'female',
       voice: 'Aoede',
       language: 'English',
       personality: 'Warm, attentive, intelligent, and supportive AI companion.',
-      communicationStyle: 'Affectionate & Caring',
-      tone: 'Romantic',
+      communicationStyle: 'Friendly & Caring',
+      tone: 'Friendly',
       purpose: 'Daily companion',
     });
 
@@ -388,8 +419,8 @@ export function registerHoorviaRoutes(app: Express) {
       const token = createSessionToken(guest);
       const companion = getCompanionProfile(guest.id) ||
         saveCompanionProfile(guest.id, {
-          name: 'Aria',
-          type: 'girlfriend',
+          name: 'Pari AI',
+          type: 'companion',
           gender: 'female',
           voice: 'Aoede',
           language: 'English',
@@ -709,7 +740,7 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
 
   // --- PUBLIC CHAT ENDPOINT ---
   app.post('/api/hoorvia/chat', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    const { message, history = [] } = req.body || {};
+    const { message, model } = req.body || {};
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Message is required.' });
     }
@@ -733,19 +764,23 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
       });
     }
 
-    // Usage Quota & BYOK Check
+    // Pari AI: app-side usage caps (chat). Owner is exempt.
+    if (!enforcePariUsage(res, userId, 'chat')) return;
+
+    // Pari AI: per-model BYOK routing with fallback to the default key.
     const isOwner = req.hoorviaUser!.role === 'owner';
-    const userModelAndKey = getUserGeminiModelAndKey(userId);
+    const requestedModel = typeof model === 'string' && model.trim() ? model.trim().slice(0, 120) : undefined;
+    const resolved = resolveModelKeyForUser(userId, requestedModel);
 
     // For public users, their own validated BYOK API key is strictly required
-    if (!isOwner && !userModelAndKey) {
+    if (!isOwner && !resolved) {
       return res.status(402).json({
         error: 'Your own API key is required to activate your companion. Please connect your Google Gemini API key in AI Provider settings to enable chat.',
       });
     }
 
-    const effectiveApiKey = isOwner ? (userModelAndKey?.apiKey || process.env.GEMINI_API_KEY) : userModelAndKey?.apiKey;
-    const effectiveModel = userModelAndKey?.model || 'gemini-2.0-flash';
+    const effectiveApiKey = isOwner ? (resolved?.apiKey || process.env.GEMINI_API_KEY) : resolved?.apiKey;
+    const effectiveModel = resolved?.model || 'gemini-2.0-flash';
 
     if (!effectiveApiKey) {
       return res.status(400).json({
@@ -766,25 +801,21 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
 
     const fullSystemPrompt = systemInstruction + memoryContext;
 
-    // Build chat contents with history
-    const formattedHistory = Array.isArray(history)
-      ? history.slice(-10).map((h: any) => ({
-          role: h.sender === 'user' ? 'user' : 'model',
-          parts: [{ text: h.text }],
-        }))
-      : [];
+    // Pari AI: history comes from the SERVER-persisted thread (memory fix),
+    // not from whatever the client claims.
+    const serverHistory = getPariThreadHistoryForModel(userId, 20);
+    const contents = [...serverHistory, { role: 'user', parts: [{ text: message }] }];
 
-    formattedHistory.push({
-      role: 'user',
-      parts: [{ text: message }],
-    });
+    // Persist the user turn immediately so context survives retries.
+    appendPariThreadMessage(userId, 'user', message);
 
     const chatResult = await executeHoorviaUserChatWithFailover(
       userId,
       effectiveApiKey,
       fullSystemPrompt,
-      formattedHistory,
-      companion.name
+      contents,
+      companion.name,
+      effectiveModel
     );
 
     if (!chatResult.success) {
@@ -795,30 +826,54 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
       });
     }
 
-    // Light Memory Fact Detection
-    if (
-      message.length > 10 &&
-      (message.toLowerCase().includes('i like') ||
-        message.toLowerCase().includes('my favorite') ||
-        message.toLowerCase().includes('i am a') ||
-        message.toLowerCase().includes('i work as'))
-    ) {
-      addUserCompanionMemory(userId, companion.id, message.slice(0, 150), 'preference');
+    let reply = chatResult.reply || '';
+
+    // Pari AI: persist the assistant turn (thread capped at 50).
+    appendPariThreadMessage(userId, 'model', reply);
+
+    // Pari AI: multilingual memory extraction (replaces the old English-only
+    // keyword sniffer). Fire-and-forget — never blocks or breaks the reply.
+    void extractAndStoreMemories(
+      effectiveApiKey,
+      effectiveModel,
+      userId,
+      companion.id,
+      req.hoorviaUser!.name,
+      message
+    ).catch(() => {});
+
+    // Pari AI: auto-create a task when the message looks task-like.
+    // Cheap second Gemini pass on the user's own key; on success a
+    // confirmation line is appended to the reply.
+    let taskCreated: { id: string; title: string; dueAt: string | null } | null = null;
+    try {
+      const extracted = await extractTaskFromMessage(effectiveApiKey, effectiveModel, message);
+      if (extracted) {
+        const task = createClientTask(userId, { ...extracted, source: 'chat' });
+        taskCreated = { id: task.id, title: task.title, dueAt: task.dueAt };
+        const dueLabel = task.dueAt ? ` (due ${new Date(task.dueAt).toLocaleString('en-GB', { timeZone: 'Asia/Riyadh' })})` : '';
+        reply += `\n\n✅ Task saved: ${task.title}${dueLabel}`;
+      }
+    } catch (err) {
+      console.warn('[PariAI] chat task auto-create failed:', (err as any)?.message || err);
     }
 
-    // Record Usage
+    // Record Usage (legacy metering + Pari caps)
     recordUserUsage(userId, false, 0);
+    recordPariUsage(userId, 'chat');
 
     res.json({
       status: 'ok',
-      reply: chatResult.reply,
+      reply,
       companionName: companion.name,
       modelUsed: chatResult.modelUsed,
       initialModel: chatResult.initialModel,
       failoverModel: chatResult.failoverModel,
       isFailover: chatResult.isFailover,
       retryCount: chatResult.retryCount,
+      taskCreated,
       usage: getUserTodayUsage(userId),
+      limits: getPariUsageSummary(userId),
     });
   });
 
@@ -830,6 +885,308 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
       usage,
       freeTierDailyLimit: policy.freeTierDailyLimit,
       maxLiveSessionMinutes: policy.maxLiveSessionMinutes,
+    });
+  });
+
+  // =====================================================================
+  // PARI AI CLIENT PANEL — /api/hoorvia/client/*
+  // All routes: behind authMiddleware, strictly userId-filtered stores.
+  // =====================================================================
+
+  /** Resolve the caller's key: per-model BYOK routing, fallback to default key. */
+  const resolvePariKey = (
+    req: AuthenticatedRequest,
+    modelOverride?: string
+  ): { apiKey: string; model: string } | null => {
+    const userId = req.hoorviaUser!.id;
+    const isOwner = req.hoorviaUser!.role === 'owner';
+    const resolved = resolveModelKeyForUser(userId, modelOverride);
+    if (!isOwner && !resolved) return null;
+    const apiKey = isOwner ? resolved?.apiKey || process.env.GEMINI_API_KEY : resolved?.apiKey;
+    if (!apiKey) return null;
+    return { apiKey, model: resolved?.model || 'gemini-2.0-flash' };
+  };
+
+  // --- Server-persisted conversation thread ---
+  app.get('/api/hoorvia/client/thread', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const thread = getPariThread(req.hoorviaUser!.id);
+    res.json({
+      messages: thread?.messages || [],
+      updatedAt: thread?.updatedAt || null,
+    });
+  });
+
+  // --- Usage meter (today + rolling week vs limits) ---
+  app.get('/api/hoorvia/client/usage', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    res.json(getPariUsageSummary(req.hoorviaUser!.id));
+  });
+
+  // --- Tasks: full CRUD ---
+  app.get('/api/hoorvia/client/tasks', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const includeDone = req.query.includeDone !== 'false';
+    res.json({ tasks: listClientTasks(req.hoorviaUser!.id, includeDone) });
+  });
+
+  app.post('/api/hoorvia/client/tasks', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { title, detail, dueAt, repeat, priority } = req.body || {};
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ error: 'Task title is required.' });
+    }
+    const task = createClientTask(req.hoorviaUser!.id, { title, detail, dueAt, repeat, priority, source: 'manual' });
+    res.json({ status: 'ok', task });
+  });
+
+  app.patch('/api/hoorvia/client/tasks/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const task = updateClientTask(req.hoorviaUser!.id, req.params.id, req.body || {});
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    res.json({ status: 'ok', task });
+  });
+
+  app.delete('/api/hoorvia/client/tasks/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const ok = deleteClientTask(req.hoorviaUser!.id, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Task not found.' });
+    res.json({ status: 'ok' });
+  });
+
+  // --- Reminders: full CRUD (driven by the persistent 30s scheduler) ---
+  app.get('/api/hoorvia/client/reminders', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const includeDone = req.query.includeDone === 'true';
+    res.json({ reminders: listClientReminders(req.hoorviaUser!.id, includeDone) });
+  });
+
+  app.post('/api/hoorvia/client/reminders', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { text, dueAt, repeat } = req.body || {};
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'Reminder text is required.' });
+    }
+    if (!dueAt) {
+      return res.status(400).json({ error: 'dueAt (ISO datetime) is required.' });
+    }
+    try {
+      const reminder = createClientReminder(req.hoorviaUser!.id, { text, dueAt, repeat });
+      res.json({ status: 'ok', reminder });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Invalid reminder.' });
+    }
+  });
+
+  app.patch('/api/hoorvia/client/reminders/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const reminder = updateClientReminder(req.hoorviaUser!.id, req.params.id, req.body || {});
+    if (!reminder) return res.status(404).json({ error: 'Reminder not found.' });
+    res.json({ status: 'ok', reminder });
+  });
+
+  app.delete('/api/hoorvia/client/reminders/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const ok = deleteClientReminder(req.hoorviaUser!.id, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Reminder not found.' });
+    res.json({ status: 'ok' });
+  });
+
+  // --- Per-model BYOK keys (masked listing only — raw keys never returned) ---
+  app.get('/api/hoorvia/client/keys', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    res.json({ keys: listModelKeys(req.hoorviaUser!.id) });
+  });
+
+  app.post('/api/hoorvia/client/keys', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { model, key } = req.body || {};
+    const result = saveModelKey(req.hoorviaUser!.id, model, key);
+    if (!result.success) return res.status(400).json({ error: result.error || 'Failed to save key.' });
+    res.json({ status: 'ok', model: (model || '').trim(), maskedKey: result.maskedKey });
+  });
+
+  app.delete('/api/hoorvia/client/keys/:model', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const ok = deleteModelKey(req.hoorviaUser!.id, req.params.model);
+    if (!ok) return res.status(404).json({ error: 'No key stored for that model.' });
+    res.json({ status: 'ok' });
+  });
+
+  // --- Web Push plumbing (PWA client subscribes; scheduler delivers) ---
+  app.get('/api/hoorvia/client/push/vapid-key', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    try {
+      res.json({ publicKey: getOrCreateVapidPublicKey() });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to prepare push keys.' });
+    }
+  });
+
+  app.post('/api/hoorvia/client/push/subscribe', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const { subscription } = req.body || {};
+    const ok = savePushSubscription(req.hoorviaUser!.id, subscription);
+    if (!ok) return res.status(400).json({ error: 'Invalid push subscription payload.' });
+    res.json({ status: 'ok' });
+  });
+
+  app.delete('/api/hoorvia/client/push/unsubscribe', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    removePushSubscription(req.hoorviaUser!.id);
+    res.json({ status: 'ok' });
+  });
+
+  // --- File generation (REAL binaries, user's key pays for the content) ---
+  const handlePariFileBuild = async (
+    req: AuthenticatedRequest,
+    res: Response,
+    kind: PariFileKind,
+    build: (apiKey: string, model: string) => Promise<{ buffer: Buffer; filename: string; mimeType: string }>
+  ) => {
+    if (!enforcePariUsage(res, req.hoorviaUser!.id, 'file')) return;
+    const keyInfo = resolvePariKey(req);
+    if (!keyInfo) {
+      return res.status(402).json({
+        error: 'Your own API key is required. Please connect your Google Gemini API key to generate files.',
+      });
+    }
+    try {
+      const { buffer, filename, mimeType } = await build(keyInfo.apiKey, keyInfo.model);
+      const meta = saveUserFile(req.hoorviaUser!.id, filename, buffer, mimeType, kind);
+      recordPariUsage(req.hoorviaUser!.id, 'file');
+      recordUserUsage(req.hoorviaUser!.id, false, 0);
+      res.json({
+        status: 'ok',
+        id: meta.id,
+        filename: meta.filename,
+        size: meta.size,
+        downloadUrl: `/api/hoorvia/client/files/${meta.id}`,
+      });
+    } catch (err: any) {
+      console.error(`[PariAI] file build (${kind}) failed:`, err?.message || err);
+      res.status(500).json({ error: err?.message || `Failed to generate ${kind.toUpperCase()} file.` });
+    }
+  };
+
+  app.post('/api/hoorvia/client/files/pptx', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { title, topic, slides, slideCount } = req.body || {};
+    await handlePariFileBuild(req, res, 'pptx', (apiKey, model) => buildPptx(apiKey, model, { title, topic, slides, slideCount }));
+  });
+
+  app.post('/api/hoorvia/client/files/docx', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { title, kind, chapters, text } = req.body || {};
+    await handlePariFileBuild(req, res, 'docx', (apiKey, model) => buildDocx(apiKey, model, { title, kind, chapters, text }));
+  });
+
+  app.post('/api/hoorvia/client/files/pdf', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { title, kind, chapters, text } = req.body || {};
+    await handlePariFileBuild(req, res, 'pdf', (apiKey, model) => buildPdf(apiKey, model, { title, kind, chapters, text }));
+  });
+
+  app.post('/api/hoorvia/client/files/epub', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { title, author, chapters, text } = req.body || {};
+    await handlePariFileBuild(req, res, 'epub', (apiKey, model) => buildEpub(apiKey, model, { title, author, chapters, text }));
+  });
+
+  app.post('/api/hoorvia/client/files/xlsx', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { title, topic, sheets } = req.body || {};
+    await handlePariFileBuild(req, res, 'xlsx', (apiKey, model) => buildXlsx(apiKey, model, { title, topic, sheets }));
+  });
+
+  app.get('/api/hoorvia/client/files/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    const found = getUserFile(req.hoorviaUser!.id, req.params.id);
+    if (!found) return res.status(404).json({ error: 'File not found.' });
+    res.setHeader('Content-Type', found.meta.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${found.meta.filename}"`);
+    return res.sendFile(found.absPath);
+  });
+
+  // --- Image generation (user's key; honest 402 when the key lacks access) ---
+  app.post('/api/hoorvia/client/image', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { prompt, model } = req.body || {};
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: 'Prompt is required.' });
+    }
+    if (!enforcePariUsage(res, req.hoorviaUser!.id, 'image')) return;
+    try {
+      const image = await generateImageForUser(req.hoorviaUser!.id, prompt, typeof model === 'string' ? model : undefined);
+      recordPariUsage(req.hoorviaUser!.id, 'image');
+      recordUserUsage(req.hoorviaUser!.id, false, 0);
+      res.json({ status: 'ok', ...image });
+    } catch (err: any) {
+      if (err instanceof PariImageAccessError) {
+        return res.status(402).json({ error: 'no_image_access', message: err.message });
+      }
+      console.error('[PariAI] image generation failed:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Image generation failed.' });
+    }
+  });
+
+  // --- Social Content Studio, Phase 1: ready-to-post pack, NO auto-posting ---
+  app.post('/api/hoorvia/client/studio/pack', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const { topic, platform } = req.body || {};
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
+      return res.status(400).json({ error: 'Topic is required.' });
+    }
+    if (!['instagram', 'tiktok', 'facebook'].includes(platform)) {
+      return res.status(400).json({ error: 'Platform must be instagram, tiktok, or facebook.' });
+    }
+    if (!enforcePariUsage(res, req.hoorviaUser!.id, 'image')) return;
+    try {
+      const pack = await buildStudioPack(req.hoorviaUser!.id, topic, platform as StudioPlatform);
+      recordPariUsage(req.hoorviaUser!.id, 'image');
+      recordUserUsage(req.hoorviaUser!.id, false, 0);
+      res.json({ status: 'ok', pack });
+    } catch (err: any) {
+      if (err instanceof PariImageAccessError) {
+        return res.status(402).json({ error: 'no_image_access', message: err.message });
+      }
+      console.error('[PariAI] studio pack failed:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Failed to build studio pack.' });
+    }
+  });
+
+  // --- In-app voice notes: raw audio -> Gemini transcription -> thread ---
+  app.post(
+    '/api/hoorvia/client/voice-note',
+    authMiddleware,
+    express.raw({ type: ['audio/*', 'video/*', 'application/octet-stream'], limit: '20mb' }),
+    async (req: AuthenticatedRequest, res: Response) => {
+      if (!enforcePariUsage(res, req.hoorviaUser!.id, 'chat')) return;
+      const keyInfo = resolvePariKey(req);
+      if (!keyInfo) {
+        return res.status(402).json({
+          error: 'Your own API key is required. Please connect your Google Gemini API key to use voice notes.',
+        });
+      }
+      const audio = req.body as Buffer;
+      if (!audio || !(audio instanceof Buffer) || audio.length < 100) {
+        return res.status(400).json({ error: 'Audio body is required (send raw audio bytes).' });
+      }
+      const contentType = (req.headers['content-type'] as string) || '';
+      const mimeType = contentType.split(';')[0].trim() || 'audio/webm';
+      try {
+        const ai = new GoogleGenAI({ apiKey: keyInfo.apiKey });
+        const response = await ai.models.generateContent({
+          model: keyInfo.model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { inlineData: { data: audio.toString('base64'), mimeType } },
+                {
+                  text: 'Transcribe this voice note exactly, in the language spoken (keep Roman Urdu as Roman Urdu, keep Urdu script as-is). Output ONLY the transcription, no commentary.',
+                },
+              ],
+            },
+          ],
+        });
+        const text = (response.text || '').trim();
+        if (!text) {
+          return res.status(500).json({ error: 'Could not transcribe the voice note. Please try again.' });
+        }
+        appendPariThreadMessage(req.hoorviaUser!.id, 'user', text);
+        recordPariUsage(req.hoorviaUser!.id, 'chat');
+        recordUserUsage(req.hoorviaUser!.id, false, 0);
+        res.json({ status: 'ok', text });
+      } catch (err: any) {
+        console.error('[PariAI] voice-note transcription failed:', err?.message || err);
+        res.status(500).json({ error: 'Voice note transcription failed. Please try again.' });
+      }
+    }
+  );
+
+  // --- Browser automation hooks: HONEST 501 (Phase 2, not a fake success) ---
+  app.post('/api/hoorvia/client/browser/jobs', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    return res.status(501).json({
+      error: 'browser_automation_phase2',
+      message:
+        'Browser automation arrives in Phase 2. The self-hosted Playwright executor is not wired up yet, so this endpoint intentionally returns 501 instead of a fake success.',
     });
   });
 

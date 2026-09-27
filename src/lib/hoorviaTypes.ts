@@ -10,6 +10,7 @@ export type CompanionType =
   | 'helper'
   | 'support'
   | 'study_partner'
+  | 'companion'
   | 'custom'
   | 'health_info_assistant'
   | 'finance_edu_assistant'

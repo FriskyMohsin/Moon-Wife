@@ -19,6 +19,7 @@ import {
   sanitizeErrorMessageForPublicUser,
 } from './hoorviaPlatform';
 import { ApiAuditLog } from './hoorviaTypes';
+import { checkPariUsage, recordPariLiveMinutes } from './pariUsage';
 import {
   createRealtimeAudioInput,
   decodedBase64ByteLength,
@@ -126,6 +127,24 @@ export async function handleHoorviaLiveWsConnection(
         })
       );
       clientWs.close(4402, 'Missing API Key');
+    }
+    return;
+  }
+
+  // Pari AI: app-side live-voice caps (30 min/day, 180 min/week). Owner exempt.
+  const liveVoiceCheck = checkPariUsage(userId, 'liveVoice');
+  if (!liveVoiceCheck.ok) {
+    console.warn(`[Hoorvia Live WS] User ${userId} live-voice limit hit: ${liveVoiceCheck.scope}`);
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(
+        JSON.stringify({
+          type: 'error',
+          message: liveVoiceCheck.message || 'Live voice limit reached.',
+          code: liveVoiceCheck.scope === 'weekly_limit' ? 'WEEKLY_LIMIT' : 'DAILY_LIMIT',
+          resetAt: liveVoiceCheck.resetAt,
+        })
+      );
+      clientWs.close(4408, 'Live Voice Limit Reached');
     }
     return;
   }
@@ -276,6 +295,7 @@ export async function handleHoorviaLiveWsConnection(
 
     // Record live usage duration
     recordUserUsage(userId, true, durationMinutes);
+    recordPariLiveMinutes(userId, durationMinutes);
 
     // Record API audit log with full live diagnostics
     recordUserApiRequest(
