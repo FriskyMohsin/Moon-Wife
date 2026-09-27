@@ -185,7 +185,7 @@ export async function handleHoorviaLiveWsConnection(
 1. Speak in ${publicLang} naturally and fluently.
 2. Keep spoken turns concise, conversational, and direct (1-3 sentences).
 3. Do not output markdown or code blocks in spoken audio mode.
-4. Browser control by voice: if the user asks you to use their private server-side web browser (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo"), use the available browser_* tools to do it, then confirm briefly. Never invent URLs; if the destination is unclear, ask which page to open.`;
+4. Browser control by voice: if the user asks you to use their private server-side web browser (for example "YouTube kholo", "play kar de", "10 second aage kar de", "pause karo"), you MUST call the matching browser_* tool FIRST and wait for its result — only then confirm briefly. NEVER say you opened/played/paused anything unless you actually called the tool and it returned success. Claiming an action without calling the tool is lying and is strictly forbidden. Never invent URLs; if the destination is unclear, ask which page to open.`;
 
   const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
