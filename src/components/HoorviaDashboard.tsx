@@ -1279,7 +1279,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const PRIORITY_STYLE: Record<string, string> = {
     low: 'bg-slate-800 text-slate-300 border-slate-700',
     med: 'bg-amber-950/60 text-amber-300 border-amber-800/40',
-    high: 'bg-rose-950/60 text-rose-300 border-rose-800/40',
+    high: 'bg-fuchsia-950/50 text-rose-300 border-fuchsia-400/25',
   };
 
   const renderTaskCard = (t: TaskItem) => (
@@ -1287,8 +1287,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
       key={t.id}
       className={`p-4 rounded-2xl border flex items-start justify-between gap-3 ${
         t.status === 'done'
-          ? 'bg-slate-950/60 border-slate-800 opacity-60'
-          : 'bg-slate-900/60 border-slate-800'
+          ? 'bg-slate-950/60 border-fuchsia-500/15 opacity-60'
+          : 'bg-slate-900/60 border-fuchsia-500/15'
       }`}
     >
       <div className="flex items-start gap-3 min-w-0">
@@ -1310,7 +1310,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${PRIORITY_STYLE[t.priority] || PRIORITY_STYLE.med}`}>
               {t.priority} priority
             </span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-950 text-slate-400 border border-slate-800">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-950 text-slate-400 border border-fuchsia-500/15">
               {t.repeat === 'once' ? 'one-time' : `repeats ${t.repeat}`}
             </span>
             {t.dueAt && (
@@ -1339,7 +1339,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     const pct = lim > 0 ? Math.min(100, Math.round((u / lim) * 100)) : 0;
     const over = lim > 0 && u >= lim;
     return (
-      <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800">
+      <div className="p-4 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15">
         <div className="flex items-center justify-between text-xs mb-2">
           <span className="text-slate-300 font-medium">{label}</span>
           <span className={`font-mono ${over ? 'text-rose-400 font-bold' : 'text-slate-400'}`}>
@@ -1348,7 +1348,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         </div>
         <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all ${over ? 'bg-rose-500' : 'bg-gradient-to-r from-rose-600 to-purple-500'}`}
+            className={`h-full rounded-full transition-all ${over ? 'bg-pink-500' : 'bg-gradient-to-r from-pink-500 to-fuchsia-500'}`}
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -1360,18 +1360,18 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#0A070B] text-slate-100 flex flex-col md:flex-row font-sans selection:bg-rose-500/30 overflow-x-hidden">
+    <div className="min-h-screen text-slate-100 flex flex-col md:flex-row font-sans selection:bg-fuchsia-500/40 overflow-x-hidden">
       {/* Sidebar Navigation */}
-      <aside className="w-full md:w-64 md:h-screen md:sticky md:top-0 md:overflow-y-auto bg-slate-950/90 border-r border-rose-950/40 p-4 flex flex-col justify-between shrink-0">
+      <aside className="w-full md:w-64 md:h-screen md:sticky md:top-0 md:overflow-y-auto bg-[#08061a]/70 backdrop-blur-xl border-r border-fuchsia-500/20 p-4 flex flex-col justify-between shrink-0 shadow-[0_0_50px_rgba(192,38,211,0.10)]">
         <div>
-          <div className="mb-5 pb-3 border-b border-rose-950/40 px-1">
+          <div className="mb-5 pb-3 border-b border-fuchsia-500/20 px-1">
             <PariBrand size="sm" />
           </div>
 
           {/* Active User Card */}
-          <div className="px-3 py-2.5 mb-4 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between text-xs">
+          <div className="px-3 py-2.5 mb-4 rounded-xl bg-slate-900/60 border border-fuchsia-500/25 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2 overflow-hidden">
-              <div className="w-7 h-7 rounded-full bg-rose-950 text-rose-300 border border-rose-800/50 flex items-center justify-center font-bold uppercase shrink-0">
+              <div className="w-7 h-7 rounded-full bg-fuchsia-950/60 text-rose-300 border border-fuchsia-400/30 flex items-center justify-center font-bold uppercase shrink-0">
                 {user.name?.[0] || 'U'}
               </div>
               <div className="truncate">
@@ -1390,7 +1390,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               <button
                 onClick={onOpenOwnerAdmin}
                 title="Owner Control Center"
-                className="px-2 py-1 rounded bg-rose-950 text-rose-300 border border-rose-700/60 text-[10px] font-bold hover:bg-rose-900"
+                className="px-2 py-1 rounded bg-fuchsia-950/60 text-rose-300 border border-fuchsia-400/40 text-[10px] font-bold hover:bg-fuchsia-900/60"
               >
                 👑 Admin
               </button>
@@ -1406,13 +1406,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all ${
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs transition-all ${
                     isActive
-                      ? 'bg-rose-950/80 text-rose-200 border border-rose-800/60 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                      ? 'pari-nav-active'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-fuchsia-500/10'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-rose-400' : 'text-slate-400'}`} />
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                   {item.label}
                 </button>
               );
@@ -1421,13 +1421,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             {user.role === 'owner' && user.id === 'usr_mohsin_owner' && onOpenOwnerAdmin && (
               <button
                 onClick={onOpenOwnerAdmin}
-                className="w-full mt-2 flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all bg-gradient-to-r from-rose-950/90 to-purple-950/90 border border-rose-600/60 text-rose-200 hover:text-white hover:border-rose-400 shadow-md shadow-rose-950/50 group"
+                className="w-full mt-2 flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all bg-gradient-to-r from-fuchsia-950/80 to-purple-950/90 border border-rose-600/60 text-rose-200 hover:text-white hover:border-rose-400 shadow-md shadow-rose-950/50 group"
               >
                 <div className="flex items-center gap-2.5">
                   <ShieldCheck className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform" />
                   <span>Owner Admin</span>
                 </div>
-                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-pink-500/20 text-rose-300 border border-pink-500/30">
                   Control
                 </span>
               </button>
@@ -1436,9 +1436,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         </div>
 
         {/* Footer Logout */}
-        <div className="pt-4 border-t border-slate-800/80 space-y-2">
+        <div className="pt-4 border-t border-fuchsia-500/25 space-y-2">
           {hasBYOK ? (
-            <div className="px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800/40 text-[10px] text-rose-300 flex items-center justify-between">
+            <div className="px-3 py-1.5 rounded-lg bg-fuchsia-950/60/40 border border-fuchsia-400/25 text-[10px] text-rose-300 flex items-center justify-between">
               <span>AI Key Connected</span>
               <CheckCircle className="w-3 h-3 text-rose-400" />
             </div>
@@ -1490,9 +1490,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           return (
             <div className="animate-fadeIn space-y-6">
               {/* Hero */}
-              <div className="rounded-3xl border border-rose-950/60 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-rose-950/30 p-6 md:p-8 shadow-2xl">
+              <div className="rounded-3xl border border-fuchsia-500/25 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-rose-950/30 p-6 md:p-8 shadow-2xl">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-rose-600 to-purple-600 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
+                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-pink-500 to-fuchsia-600 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
                     P
                   </div>
                   <div className="min-w-0">
@@ -1504,7 +1504,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 </div>
                 <button
                   onClick={() => setActiveTab('chat')}
-                  className="mt-5 inline-flex items-center gap-2 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-semibold px-6 py-3 rounded-2xl shadow-lg transition"
+                  className="mt-5 inline-flex items-center gap-2 bg-gradient-to-r from-pink-500 via-fuchsia-500 to-purple-600 neon-glow-btn hover:from-pink-500 hover:to-fuchsia-500 text-white font-semibold px-6 py-3 rounded-2xl shadow-lg transition"
                 >
                   <Sparkles className="w-5 h-5" /> Say hi to Pari
                 </button>
@@ -1518,7 +1518,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     <button
                       key={qa.id}
                       onClick={() => setActiveTab(qa.tab)}
-                      className="text-left p-4 rounded-2xl border border-slate-800 bg-slate-900/60 hover:border-rose-800/60 hover:bg-slate-900 transition group"
+                      className="text-left p-4 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60 hover:border-fuchsia-400/40 hover:bg-slate-900 transition group"
                     >
                       <qa.icon className="w-6 h-6 text-rose-400 mb-2 group-hover:scale-110 transition" />
                       <div className="font-semibold text-white text-sm">{qa.label}</div>
@@ -1533,7 +1533,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <div className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Today at a glance</div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {stats.map((s) => (
-                    <div key={s.label} className="p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
+                    <div key={s.label} className="p-4 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60">
                       <div className="text-2xl font-bold text-white">{s.value}</div>
                       <div className="text-xs text-slate-400 mt-1">{s.label}</div>
                     </div>
@@ -1543,7 +1543,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
               {/* Up next */}
               <div className="grid md:grid-cols-2 gap-3">
-                <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
+                <div className="p-5 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60">
                   <div className="flex items-center justify-between mb-3">
                     <div className="font-semibold text-white">Pending tasks</div>
                     <button onClick={() => setActiveTab('tasks')} className="text-xs text-rose-400 font-semibold hover:underline">
@@ -1565,7 +1565,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     </div>
                   )}
                 </div>
-                <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60">
+                <div className="p-5 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60">
                   <div className="flex items-center justify-between mb-3">
                     <div className="font-semibold text-white">Upcoming reminders</div>
                     <button onClick={() => setActiveTab('reminders')} className="text-xs text-rose-400 font-semibold hover:underline">
@@ -1596,11 +1596,11 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           const isChatRtl = isRtlLanguage(companion.language || 'English');
 
           return (
-            <div className="h-[calc(100vh-8rem)] flex flex-col bg-slate-900/60 rounded-3xl border border-rose-950/60 overflow-hidden shadow-2xl animate-fadeIn">
+            <div className="h-[calc(100vh-8rem)] flex flex-col bg-slate-900/60 rounded-3xl border border-fuchsia-500/25 overflow-hidden shadow-2xl animate-fadeIn">
               {/* Chat Top Bar */}
-              <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="px-6 py-4 border-b border-fuchsia-500/15 flex items-center justify-between bg-slate-950">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-rose-600 to-purple-600 flex items-center justify-center font-bold text-white">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-pink-500 to-fuchsia-600 flex items-center justify-center font-bold text-white">
                     P
                   </div>
                   <div>
@@ -1610,14 +1610,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px] text-slate-300">
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-fuchsia-500/15 text-[11px] text-slate-300">
                     <Globe className="w-3.5 h-3.5 text-rose-400" />
                     <span>{chatLangObj.name}</span>
                     {isChatRtl && (
-                      <span className="text-[9px] bg-rose-950 px-1 rounded text-rose-300 font-mono">RTL</span>
+                      <span className="text-[9px] bg-fuchsia-950/60 px-1 rounded text-rose-300 font-mono">RTL</span>
                     )}
                   </div>
-                  <span className={`text-[10px] px-2.5 py-1 rounded-full border ${hasBYOK ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/40' : 'bg-rose-950 text-rose-300 border-rose-800/50'}`}>
+                  <span className={`text-[10px] px-2.5 py-1 rounded-full border ${hasBYOK ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/40' : 'bg-fuchsia-950/60 text-rose-300 border-fuchsia-400/30'}`}>
                     {hasBYOK ? 'Key connected' : 'Key needed'}
                   </span>
                 </div>
@@ -1638,7 +1638,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {chatNotice && (
                 <div className={`px-6 py-2.5 border-b text-xs flex items-center justify-between gap-3 ${
                   chatNotice.kind === 'limit'
-                    ? 'bg-rose-950/70 border-rose-800/60 text-rose-200'
+                    ? 'bg-fuchsia-950/60 border-fuchsia-400/40 text-rose-200'
                     : chatNotice.kind === 'key'
                     ? 'bg-amber-950/70 border-amber-800/60 text-amber-200'
                     : 'bg-red-950/60 border-red-800/60 text-red-200'
@@ -1647,7 +1647,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   {chatNotice.kind === 'limit' && (
                     <button
                       onClick={() => setActiveTab('usage')}
-                      className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] shrink-0"
+                      className="px-3 py-1 rounded-lg bg-pink-500 hover:bg-pink-500 text-white font-bold text-[11px] shrink-0"
                     >
                       View Usage
                     </button>
@@ -1670,11 +1670,11 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 className="flex-1 p-6 overflow-y-auto space-y-4"
               >
                 {chatMessages.length === 0 ? (
-                  <div className="text-center py-16 text-slate-500 text-xs space-y-3" dir="ltr">
-                    <div className="w-14 h-14 mx-auto rounded-full bg-gradient-to-br from-rose-600 to-purple-600 flex items-center justify-center text-white text-xl font-bold shadow-lg">
-                      P
-                    </div>
-                    <p className="text-sm text-slate-300 font-medium">Say hi to Pari AI 👋</p>
+                  <div className="text-center py-14 text-slate-500 text-xs space-y-4" dir="ltr">
+                    <div className="pari-orb mx-auto">P</div>
+                    <p className="text-xl font-bold pt-6">
+                      Say hi to <span className="pari-glow-text">Pari AI</span> <span className="text-white">👋</span>
+                    </p>
                     <p className="max-w-sm mx-auto leading-relaxed">
                       Type, dictate, or send a voice note. Ask her to remind you, make a task,
                       or create a file — she remembers what matters to you.
@@ -1692,8 +1692,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       <div
                         className={`max-w-lg px-4 py-3 rounded-2xl text-xs leading-relaxed ${
                           msg.sender === 'user'
-                            ? 'bg-rose-600 text-white rounded-br-none shadow-md'
-                            : 'bg-slate-950 text-slate-200 border border-slate-800 rounded-bl-none shadow-md'
+                            ? 'bg-pink-500 text-white rounded-br-none shadow-md'
+                            : 'bg-slate-950 text-slate-200 border border-fuchsia-500/15 rounded-bl-none shadow-md'
                         }`}
                       >
                         {renderMessageText(msg.text)}
@@ -1724,7 +1724,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 )}
                 {isSendingChat && (
                   <div className="flex items-start">
-                    <div className="px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
+                    <div className="px-4 py-3 rounded-2xl bg-slate-950 border border-fuchsia-500/15 text-xs text-slate-400 flex items-center gap-2">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
                       Pari AI is thinking…
                     </div>
@@ -1733,15 +1733,15 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </div>
 
               {/* Chat Input Bar */}
-              <form onSubmit={handleSendChat} className="p-4 bg-slate-950 border-t border-slate-800 flex gap-2 items-center">
+              <form onSubmit={handleSendChat} className="p-4 bg-slate-950 border-t border-fuchsia-500/15 flex gap-2 items-center">
                 <button
                   type="button"
                   onClick={toggleVoiceInput}
                   title={isListening ? 'Stop listening' : 'Dictate with your voice'}
                   className={`p-3 rounded-xl border transition-all shrink-0 ${
                     isListening
-                      ? 'bg-rose-600 border-rose-500 text-white animate-pulse'
-                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-rose-500'
+                      ? 'bg-pink-500 border-rose-500 text-white animate-pulse'
+                      : 'bg-slate-900 border-fuchsia-500/15 text-slate-300 hover:border-rose-500'
                   }`}
                 >
                   {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -1753,7 +1753,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   className={`p-3 rounded-xl border transition-all shrink-0 ${
                     isRecordingNote
                       ? 'bg-purple-600 border-purple-500 text-white animate-pulse'
-                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-purple-500'
+                      : 'bg-slate-900 border-fuchsia-500/15 text-slate-300 hover:border-purple-500'
                   }`}
                 >
                   <Volume2 className="w-4 h-4" />
@@ -1765,12 +1765,12 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder={isRecordingNote ? 'Recording voice note… tap again to stop' : `Message Pari AI in ${chatLangObj.name}...`}
                   disabled={isRecordingNote}
-                  className="flex-1 px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500 disabled:opacity-60"
+                  className="flex-1 px-4 py-3 rounded-xl pari-input text-white text-xs disabled:opacity-60"
                 />
                 <button
                   type="submit"
                   disabled={isSendingChat || !chatInput.trim()}
-                  className="px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                  className="pari-btn px-5 py-3 rounded-xl text-white text-xs flex items-center gap-1.5 shrink-0 disabled:opacity-50"
                 >
                   <Send className="w-3.5 h-3.5" /> Send
                 </button>
@@ -1781,7 +1781,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
         {/* ================= TAB: VOICE CALL ================= */}
         {activeTab === 'voice' && (
-          <div className="p-8 rounded-3xl bg-slate-900/60 border border-rose-950/60 text-center space-y-6 animate-fadeIn">
+          <div className="p-8 rounded-3xl bg-slate-900/60 border border-fuchsia-500/25 text-center space-y-6 animate-fadeIn">
             {!hasBYOK && (
               <div className="p-4 rounded-2xl bg-amber-950/70 border border-amber-800/80 flex items-center justify-between text-amber-200 text-xs text-left">
                 <div className="flex items-center gap-2.5">
@@ -1809,7 +1809,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {(liveState === 'LISTENING' || liveState === 'SPEAKING') && (
                 <div
                   className={`absolute inset-0 rounded-full blur-xl transition-all duration-300 ${
-                    liveState === 'SPEAKING' ? 'bg-rose-500/40 animate-pulse' : 'bg-emerald-500/30'
+                    liveState === 'SPEAKING' ? 'bg-pink-500/40 animate-pulse' : 'bg-emerald-500/30'
                   }`}
                   style={{ transform: `scale(${1 + Math.min(audioLevel * 1.5, 0.8)})` }}
                 />
@@ -1817,14 +1817,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               <div
                 className={`w-32 h-32 rounded-full p-1 transition-all duration-300 shadow-2xl ${
                   liveState === 'SPEAKING'
-                    ? 'bg-gradient-to-br from-rose-500 to-amber-500 shadow-rose-900/80'
+                    ? 'bg-gradient-to-br from-pink-500 to-amber-500 shadow-rose-900/80'
                     : liveState === 'LISTENING'
                     ? 'bg-gradient-to-br from-emerald-500 to-teal-500 shadow-emerald-900/80'
                     : liveState === 'CONNECTING' || liveState === 'REQUESTING_MIC'
                     ? 'bg-gradient-to-br from-amber-500 to-rose-500 shadow-amber-900/80 animate-spin'
                     : liveState === 'ERROR'
-                    ? 'bg-gradient-to-br from-rose-700 to-red-900 shadow-rose-950/80'
-                    : 'bg-gradient-to-br from-rose-900/60 to-purple-950/60 shadow-slate-950'
+                    ? 'bg-gradient-to-br from-pink-600 to-fuchsia-900 shadow-rose-950/80'
+                    : 'bg-gradient-to-br from-fuchsia-900/50 to-purple-950/60 shadow-slate-950'
                 }`}
               >
                 <div className="w-full h-full rounded-full bg-slate-950 flex flex-col items-center justify-center text-slate-100">
@@ -1872,7 +1872,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 )}
                 {liveState === 'ERROR' && (
                   <>
-                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    <span className="w-2 h-2 rounded-full bg-pink-500" />
                     <span className="text-rose-400">Call error</span>
                   </>
                 )}
@@ -1884,10 +1884,10 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </div>
               <p className="text-xs text-slate-400 max-w-md mx-auto">{liveStatus}</p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-[11px] text-rose-300/80 font-mono">
-                <span className="px-2.5 py-1 rounded-lg bg-slate-950/80 border border-rose-950/60">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-950/80 border border-fuchsia-500/25">
                   Voice: {companion.voice}
                 </span>
-                <span className="px-2.5 py-1 rounded-lg bg-slate-950/80 border border-rose-950/60">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-950/80 border border-fuchsia-500/25">
                   Language: {companion.language}
                 </span>
                 {connectedLiveModel && (
@@ -1899,7 +1899,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {liveError && (
-              <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-800/70 text-rose-200 text-xs max-w-md mx-auto flex items-start gap-2 text-left">
+              <div className="p-3.5 rounded-2xl bg-fuchsia-950/50 border border-fuchsia-400/40 text-rose-200 text-xs max-w-md mx-auto flex items-start gap-2 text-left">
                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="font-semibold text-rose-300">Call Notice</div>
@@ -1913,7 +1913,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {liveState === 'LISTENING' || liveState === 'SPEAKING' ? (
                 <button
                   onClick={() => stopLiveSession(true)}
-                  className="w-20 h-20 rounded-full text-xs font-bold transition-all shadow-xl bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center gap-1"
+                  className="w-20 h-20 rounded-full text-xs font-bold transition-all shadow-xl bg-pink-500 hover:bg-pink-500 text-white flex flex-col items-center justify-center gap-1"
                   title="End call"
                 >
                   <PhoneOff className="w-7 h-7" />
@@ -1930,7 +1930,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               ) : (
                 <button
                   onClick={startLiveSession}
-                  className="w-20 h-20 rounded-full text-xs font-bold transition-all shadow-xl shadow-rose-950/60 bg-gradient-to-br from-rose-600 to-purple-600 hover:from-rose-500 hover:to-purple-500 text-white flex flex-col items-center justify-center gap-1"
+                  className="w-20 h-20 rounded-full text-xs font-bold transition-all shadow-xl shadow-rose-950/60 bg-gradient-to-br from-pink-500 to-fuchsia-600 hover:from-pink-500 hover:to-fuchsia-500 text-white flex flex-col items-center justify-center gap-1"
                   title="Call Pari AI"
                 >
                   <Phone className="w-7 h-7" />
@@ -1954,7 +1954,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: TASKS ================= */}
         {activeTab === 'tasks' && (
           <div className="space-y-6 animate-fadeIn">
-            <div className="border-b border-slate-800 pb-4">
+            <div className="border-b border-fuchsia-500/15 pb-4">
               <h2 className="text-2xl font-bold text-white">Tasks</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Create tasks here — or just tell Pari AI in chat ("remind me to call mom at 7"). Repeating tasks keep working even when the app is closed.
@@ -1962,13 +1962,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {taskMsg && (
-              <div className="p-3.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300">
+              <div className="p-3.5 rounded-xl bg-fuchsia-950/50 border border-fuchsia-400/40 text-xs text-rose-300">
                 {taskMsg}
               </div>
             )}
 
             {/* Create / Edit form */}
-            <form onSubmit={handleSaveTask} className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+            <form onSubmit={handleSaveTask} className="p-5 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15 space-y-3">
               <h3 className="text-sm font-bold text-white">{editingTaskId ? 'Edit task' : 'New task'}</h3>
               <input
                 type="text"
@@ -1976,14 +1976,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 value={taskTitle}
                 onChange={(e) => setTaskTitle(e.target.value)}
                 placeholder="Task title — e.g. Call the bank"
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500"
               />
               <textarea
                 value={taskDetail}
                 onChange={(e) => setTaskDetail(e.target.value)}
                 placeholder="Details (optional)"
                 rows={2}
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500 resize-none"
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500 resize-none"
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
@@ -1992,7 +1992,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     type="datetime-local"
                     value={taskDueAt}
                     onChange={(e) => setTaskDueAt(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500"
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs focus:outline-none focus:border-rose-500"
                   />
                 </div>
                 <div>
@@ -2000,7 +2000,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   <select
                     value={taskRepeat}
                     onChange={(e) => setTaskRepeat(e.target.value as any)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500"
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs focus:outline-none focus:border-rose-500"
                   >
                     <option value="once">One-time</option>
                     <option value="daily">Daily</option>
@@ -2012,7 +2012,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   <select
                     value={taskPriority}
                     onChange={(e) => setTaskPriority(e.target.value as any)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500"
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs focus:outline-none focus:border-rose-500"
                   >
                     <option value="low">Low</option>
                     <option value="med">Medium</option>
@@ -2023,7 +2023,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5"
+                  className="px-5 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1.5"
                 >
                   <Plus className="w-3.5 h-3.5" /> {editingTaskId ? 'Save changes' : 'Add task'}
                 </button>
@@ -2045,7 +2045,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading tasks…
               </div>
             ) : tasks.length === 0 ? (
-              <div className="text-center py-14 text-slate-500 text-xs space-y-2 border border-dashed border-slate-800 rounded-2xl">
+              <div className="text-center py-14 text-slate-500 text-xs space-y-2 border border-dashed border-fuchsia-500/15 rounded-2xl">
                 <ListTodo className="w-10 h-10 mx-auto text-slate-700" />
                 <p className="text-sm text-slate-300 font-medium">No tasks yet</p>
                 <p className="max-w-xs mx-auto">Add one above — or just tell Pari AI in chat what you need done.</p>
@@ -2092,7 +2092,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: REMINDERS ================= */}
         {activeTab === 'reminders' && (
           <div className="space-y-6 animate-fadeIn">
-            <div className="border-b border-slate-800 pb-4">
+            <div className="border-b border-fuchsia-500/15 pb-4">
               <h2 className="text-2xl font-bold text-white">Reminders</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Reminders fire automatically — as push notifications and as messages from Pari AI in chat.
@@ -2100,7 +2100,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {remindersFromTasks && (
-              <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400">
+              <div className="p-3.5 rounded-xl bg-slate-900/80 border border-fuchsia-500/15 text-xs text-slate-400">
                 Reminders fire from your repeating tasks. Make any task repeat <strong className="text-slate-200">daily</strong> or{' '}
                 <strong className="text-slate-200">weekly</strong> and it shows up here.
               </div>
@@ -2108,7 +2108,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
             <div className="space-y-2">
               {reminders.length === 0 ? (
-                <div className="text-center py-14 text-slate-500 text-xs space-y-2 border border-dashed border-slate-800 rounded-2xl">
+                <div className="text-center py-14 text-slate-500 text-xs space-y-2 border border-dashed border-fuchsia-500/15 rounded-2xl">
                   <Bell className="w-10 h-10 mx-auto text-slate-700" />
                   <p className="text-sm text-slate-300 font-medium">No reminders yet</p>
                   <p className="max-w-xs mx-auto">
@@ -2116,7 +2116,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   </p>
                   <button
                     onClick={() => setActiveTab('tasks')}
-                    className="mt-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+                    className="mt-2 px-4 py-2 rounded-xl bg-pink-500 hover:bg-pink-500 text-white text-xs font-bold"
                   >
                     Go to Tasks
                   </button>
@@ -2125,9 +2125,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 reminders.map((r) => (
                   <div
                     key={r.id}
-                    className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 flex items-center gap-3"
+                    className="p-4 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15 flex items-center gap-3"
                   >
-                    <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/40 text-rose-300 shrink-0">
+                    <div className="p-2.5 rounded-xl bg-fuchsia-950/50 border border-fuchsia-400/25 text-rose-300 shrink-0">
                       <Bell className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
@@ -2143,7 +2143,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               )}
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 leading-relaxed">
+            <div className="p-4 rounded-2xl bg-slate-950/80 border border-fuchsia-500/15 text-xs text-slate-400 leading-relaxed">
               <strong className="text-slate-200">Tip:</strong> turn on push notifications in{' '}
               <button onClick={() => setActiveTab('settings')} className="text-rose-400 font-semibold hover:underline">
                 Settings
@@ -2156,7 +2156,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: MEMORY ================= */}
         {activeTab === 'memory' && (
           <div className="space-y-6 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+            <div className="flex items-center justify-between border-b border-fuchsia-500/15 pb-4">
               <div>
                 <h2 className="text-2xl font-bold text-white">Memory</h2>
                 <p className="text-xs text-slate-400">
@@ -2165,32 +2165,32 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </div>
               <button
                 onClick={handleResetMemories}
-                className="px-3 py-1.5 rounded-lg bg-rose-950/80 border border-rose-800/60 text-rose-300 hover:bg-rose-900 text-xs font-medium flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-lg bg-fuchsia-950/70 border border-fuchsia-400/40 text-rose-300 hover:bg-fuchsia-900/60 text-xs font-medium flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" /> Reset
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 leading-relaxed">
+            <div className="p-4 rounded-2xl bg-slate-950/80 border border-fuchsia-500/15 text-xs text-slate-400 leading-relaxed">
               <strong className="text-slate-200">How it works:</strong> Pari AI now auto-remembers in any language.
               Mention something in chat — your routine, preferences, people, goals — and it is saved here automatically.
               You can add, edit, or wipe memories anytime.
             </div>
 
             {/* Add Memory Form */}
-            <form onSubmit={handleAddMemory} className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 flex gap-2">
+            <form onSubmit={handleAddMemory} className="p-4 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15 flex gap-2">
               <input
                 type="text"
                 required
                 value={newMemoryFact}
                 onChange={(e) => setNewMemoryFact(e.target.value)}
                 placeholder="Add a fact — e.g. Allergic to peanuts, gym at 6am, daughter's birthday June 12..."
-                className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs focus:outline-none focus:border-rose-500"
               />
               <select
                 value={newMemoryCategory}
                 onChange={(e) => setNewMemoryCategory(e.target.value)}
-                className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none"
+                className="px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs focus:outline-none"
               >
                 <option value="preference">Preference</option>
                 <option value="personal">Personal</option>
@@ -2199,7 +2199,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </select>
               <button
                 type="submit"
-                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"
+                className="px-4 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" /> Add
               </button>
@@ -2215,7 +2215,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 memories.map((m) => (
                   <div
                     key={m.id}
-                    className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs"
+                    className="p-3.5 rounded-xl bg-slate-900/80 border border-fuchsia-500/15 text-xs"
                   >
                     {editingMemoryId === m.id ? (
                       <div className="flex gap-2 items-center">
@@ -2239,7 +2239,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                         </select>
                         <button
                           onClick={handleSaveMemoryEdit}
-                          className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+                          className="px-3 py-2 rounded-lg bg-pink-500 hover:bg-pink-500 text-white text-xs font-bold"
                         >
                           Save
                         </button>
@@ -2253,7 +2253,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     ) : (
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800/40 shrink-0">
+                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-fuchsia-950/60 text-rose-300 border border-fuchsia-400/25 shrink-0">
                             {m.category}
                           </span>
                           <span className="text-slate-200">{m.fact}</span>
@@ -2286,7 +2286,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: FILES & STUDIO ================= */}
         {activeTab === 'files' && (
           <div className="space-y-8 animate-fadeIn">
-            <div className="border-b border-slate-800 pb-4">
+            <div className="border-b border-fuchsia-500/15 pb-4">
               <h2 className="text-2xl font-bold text-white">Files & Studio</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Generate real downloadable files, or a ready-to-post content pack — just describe what you need.
@@ -2298,7 +2298,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <FileText className="w-4 h-4 text-rose-400" /> Make a file
               </h3>
-              <form onSubmit={handleGenerateFile} className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+              <form onSubmit={handleGenerateFile} className="p-5 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15 space-y-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-400 mb-1.5">File type</label>
                   <div className="flex flex-wrap gap-2">
@@ -2317,8 +2317,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                         onClick={() => setFileType(t.id)}
                         className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
                           fileType === t.id
-                            ? 'bg-rose-950/80 text-rose-200 border-rose-600'
-                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
+                            ? 'bg-fuchsia-950/70 text-rose-200 border-rose-600'
+                            : 'bg-slate-950 text-slate-400 border-fuchsia-500/15 hover:border-slate-700'
                         }`}
                       >
                         {t.label}
@@ -2338,18 +2338,18 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   value={fileTitle}
                   onChange={(e) => setFileTitle(e.target.value)}
                   placeholder="Title — e.g. My Business Plan"
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500"
                 />
                 <textarea
                   value={fileOutline}
                   onChange={(e) => setFileOutline(e.target.value)}
                   placeholder="Outline or key points (optional) — what should go inside?"
                   rows={3}
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500 resize-none"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500 resize-none"
                 />
 
                 {fileError && (
-                  <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300">
+                  <div className="p-3 rounded-xl bg-fuchsia-950/50 border border-fuchsia-400/40 text-xs text-rose-300">
                     {fileError}
                   </div>
                 )}
@@ -2358,7 +2358,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   <button
                     type="submit"
                     disabled={fileLoading || !fileTitle.trim()}
-                    className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
+                    className="pari-btn px-5 py-2.5 rounded-xl text-white text-xs disabled:opacity-50 flex items-center gap-1.5"
                   >
                     {fileLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                     {fileLoading ? 'Generating…' : 'Generate file'}
@@ -2381,7 +2381,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-rose-400" /> Content Studio
               </h3>
-              <form onSubmit={handleStudioPack} className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+              <form onSubmit={handleStudioPack} className="p-5 rounded-2xl bg-slate-900/60 border border-fuchsia-500/15 space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input
                     type="text"
@@ -2389,12 +2389,12 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     value={studioTopic}
                     onChange={(e) => setStudioTopic(e.target.value)}
                     placeholder="Topic — e.g. 5 morning habits for busy nurses"
-                    className="px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
+                    className="px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500"
                   />
                   <select
                     value={studioPlatform}
                     onChange={(e) => setStudioPlatform(e.target.value)}
-                    className="px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
+                    className="px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-sm focus:outline-none focus:border-rose-500"
                   >
                     <option>Instagram</option>
                     <option>TikTok</option>
@@ -2413,7 +2413,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <button
                   type="submit"
                   disabled={studioLoading || !studioTopic.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-purple-600 hover:from-rose-500 hover:to-purple-500 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-fuchsia-600 hover:from-pink-500 hover:to-fuchsia-500 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
                 >
                   {studioLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
                   {studioLoading ? 'Creating pack…' : 'Create content pack'}
@@ -2425,11 +2425,11 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       <img
                         src={studioResult.imageUrl}
                         alt={studioTopic}
-                        className="w-full max-w-md rounded-2xl border border-slate-800"
+                        className="w-full max-w-md rounded-2xl border border-fuchsia-500/15"
                       />
                     )}
                     {studioResult.caption && (
-                      <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
+                      <div className="p-4 rounded-xl bg-slate-950 border border-fuchsia-500/15">
                         <div className="flex items-center justify-between mb-1.5">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Caption</span>
                           <button
@@ -2445,7 +2445,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       </div>
                     )}
                     {studioResult.hashtags && (
-                      <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
+                      <div className="p-4 rounded-xl bg-slate-950 border border-fuchsia-500/15">
                         <div className="flex items-center justify-between mb-1.5">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Hashtags</span>
                           <button
@@ -2485,8 +2485,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 onClick={() => fileInputRef.current?.click()}
                 className={`p-8 rounded-2xl border-2 border-dashed text-center cursor-pointer transition-colors ${
                   dragOver
-                    ? 'border-rose-500 bg-rose-950/30'
-                    : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+                    ? 'border-rose-500 bg-fuchsia-950/60/30'
+                    : 'border-fuchsia-500/15 bg-slate-900/60 hover:border-slate-700'
                 }`}
               >
                 <input
@@ -2502,7 +2502,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     <p className="text-xs text-slate-300 font-semibold">Uploading… {uploadProgress}%</p>
                     <div className="w-full max-w-xs mx-auto h-2 rounded-full bg-slate-800 overflow-hidden">
                       <div
-                        className="h-full bg-rose-500 rounded-full transition-all"
+                        className="h-full bg-pink-500 rounded-full transition-all"
                         style={{ width: `${uploadProgress}%` }}
                       />
                     </div>
@@ -2521,7 +2521,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </div>
 
               {uploadError && (
-                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300">
+                <div className="p-3 rounded-xl bg-fuchsia-950/50 border border-fuchsia-400/40 text-xs text-rose-300">
                   {uploadError}
                 </div>
               )}
@@ -2554,7 +2554,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 {myFilesLoading && myFiles.length === 0 ? (
                   <p className="text-xs text-slate-500 py-4 text-center">Loading files…</p>
                 ) : myFiles.length === 0 ? (
-                  <p className="text-xs text-slate-500 py-4 text-center border border-slate-800 rounded-xl">
+                  <p className="text-xs text-slate-500 py-4 text-center border border-fuchsia-500/15 rounded-xl">
                     No files yet — generate one above or upload a reference file.
                   </p>
                 ) : (
@@ -2562,7 +2562,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     {myFiles.map((f) => (
                       <div
                         key={f.id}
-                        className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between gap-3"
+                        className="p-3 rounded-xl bg-slate-900/60 border border-fuchsia-500/15 flex items-center justify-between gap-3"
                       >
                         <div className="min-w-0">
                           <p className="text-xs text-white font-semibold truncate">{f.filename}</p>
@@ -2590,7 +2590,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: USAGE ================= */}
         {activeTab === 'usage' && (
           <div className="space-y-6 max-w-2xl animate-fadeIn">
-            <div className="border-b border-slate-800 pb-4">
+            <div className="border-b border-fuchsia-500/15 pb-4">
               <h2 className="text-2xl font-bold text-white">Usage</h2>
               <p className="text-xs text-slate-400 mt-1">
                 Your fair-use quota — daily and weekly. Limits apply to everyone, even with your own API key.
@@ -2632,14 +2632,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
         {/* ================= TAB: SETTINGS ================= */}
         {activeTab === 'settings' && (
           <div className="space-y-6 max-w-2xl animate-fadeIn">
-            <div className="border-b border-slate-800 pb-4">
+            <div className="border-b border-fuchsia-500/15 pb-4">
               <h2 className="text-2xl font-bold text-white">Settings</h2>
               <p className="text-xs text-slate-400 mt-1">Your companion, language, voice, AI keys, and notifications.</p>
             </div>
 
             {/* Browser self-test — one click proves which server code is live,
                 whether the browser window is visible, and that YouTube opens */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-3">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-3">
               <h3 className="text-sm font-bold text-white">Browser self-test</h3>
               <p className="text-[11px] text-slate-500">
                 Opens YouTube in the server browser and shows you exactly which code is running.
@@ -2649,7 +2649,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 type="button"
                 onClick={handleBrowserSelfTest}
                 disabled={browserTestLoading}
-                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
+                className="pari-btn px-5 py-2.5 rounded-xl text-white text-xs disabled:opacity-50 flex items-center gap-1.5"
               >
                 {browserTestLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                 {browserTestLoading ? 'Testing…' : 'Run browser test'}
@@ -2666,14 +2666,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     <p className="text-red-400 font-semibold">Failed{browserTest.step ? ` at step: ${browserTest.step}` : ''} — {browserTest.error || 'unknown error'}</p>
                   )}
                   {browserTest.screenshot && (
-                    <img src={browserTest.screenshot} alt="Browser screenshot" className="rounded-xl border border-slate-800 w-full" />
+                    <img src={browserTest.screenshot} alt="Browser screenshot" className="rounded-xl border border-fuchsia-500/15 w-full" />
                   )}
                 </div>
               )}
             </div>
 
             {/* Companion identity */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-2">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-2">
               <h3 className="text-sm font-bold text-white">My Companion</h3>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Companion name</label>
@@ -2682,14 +2682,14 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   value="Pari AI"
                   readOnly
                   disabled
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-sm cursor-not-allowed opacity-80"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-slate-300 text-sm cursor-not-allowed opacity-80"
                 />
                 <p className="text-[11px] text-slate-500 mt-1">Renamable later — for now she is Pari AI.</p>
               </div>
             </div>
 
             {/* Language */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-2">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-2">
               <h3 className="text-sm font-bold text-white">Language</h3>
               <SearchableLanguagePicker
                 selectedLanguage={companion.language || 'English'}
@@ -2714,7 +2714,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {/* Voice */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-2">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-bold text-white">Voice</h3>
                 <span className="text-[10px] text-slate-400">Tap Preview to hear a sample</span>
@@ -2732,8 +2732,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       }}
                       className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
                         isSelected
-                          ? 'bg-rose-950/40 border-rose-500 text-white shadow-sm ring-1 ring-rose-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                          ? 'bg-fuchsia-950/60/40 border-rose-500 text-white shadow-sm ring-1 ring-rose-500/50'
+                          : 'bg-slate-950 border-fuchsia-500/15 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div className="flex-1 min-w-0">
@@ -2759,7 +2759,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                         title={`Preview ${v.name} voice`}
                         className={`p-1.5 px-2 rounded-lg border text-xs font-medium transition-all flex items-center gap-1 shrink-0 ${
                           isPlaying
-                            ? 'bg-rose-500 text-white border-rose-400 animate-pulse'
+                            ? 'bg-pink-500 text-white border-rose-400 animate-pulse'
                             : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700'
                         }`}
                       >
@@ -2782,7 +2782,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {/* BYOK keys */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-4">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-4">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Key className="w-4 h-4 text-rose-400" /> Your AI keys (BYOK)
@@ -2813,7 +2813,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   keys.map((k) => (
                     <div
                       key={k.model}
-                      className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between"
+                      className="p-3 rounded-xl bg-slate-950 border border-fuchsia-500/15 flex items-center justify-between"
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -2833,7 +2833,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </div>
 
               {/* Add key form */}
-              <form onSubmit={handleAddKey} className="space-y-2.5 pt-1 border-t border-slate-800">
+              <form onSubmit={handleAddKey} className="space-y-2.5 pt-1 border-t border-fuchsia-500/15">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-3">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">Model</label>
@@ -2843,7 +2843,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       onChange={(e) => setNewKeyModel(e.target.value)}
                       placeholder="gemini-2.0-flash"
                       list="pari-model-suggestions"
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
                     />
                     <datalist id="pari-model-suggestions">
                       <option value="gemini-2.0-flash" />
@@ -2858,21 +2858,21 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                       value={newKeyValue}
                       onChange={(e) => setNewKeyValue(e.target.value)}
                       placeholder="AIzaSy..."
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-fuchsia-500/15 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
                   disabled={isSavingKey || !newKeyValue.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-500 text-white text-xs font-bold disabled:opacity-50"
                 >
                   {isSavingKey ? 'Saving…' : 'Save key'}
                 </button>
               </form>
 
               {/* Tutorial video slot — wired to GEMINI_KEY_TUTORIAL_VIDEO_URL */}
-              <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center gap-4">
+              <div className="p-4 rounded-2xl bg-slate-950/80 border border-fuchsia-500/15 flex items-center gap-4">
                 {GEMINI_KEY_TUTORIAL_VIDEO_URL ? (
                   <a
                     href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
@@ -2883,13 +2883,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   >
                     <Video className="w-6 h-6 text-slate-600" />
                     <span className="absolute inset-0 flex items-center justify-center">
-                      <span className="w-9 h-9 rounded-full bg-rose-600/90 flex items-center justify-center">
+                      <span className="w-9 h-9 rounded-full bg-pink-500/90 flex items-center justify-center">
                         <Play className="w-4 h-4 text-white fill-current ml-0.5" />
                       </span>
                     </span>
                   </a>
                 ) : (
-                  <div className="relative w-28 h-16 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 overflow-hidden opacity-70">
+                  <div className="relative w-28 h-16 rounded-xl bg-slate-900 border border-fuchsia-500/15 flex items-center justify-center shrink-0 overflow-hidden opacity-70">
                     <Video className="w-6 h-6 text-slate-700" />
                     <span className="absolute inset-0 flex items-center justify-center">
                       <span className="w-9 h-9 rounded-full bg-slate-700/80 flex items-center justify-center">
@@ -2917,7 +2917,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {/* Push notifications */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-3">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-white">Push notifications</h3>
@@ -2932,7 +2932,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   role="switch"
                   aria-checked={pushEnabled}
                   className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 ${
-                    pushEnabled ? 'bg-rose-600' : 'bg-slate-700'
+                    pushEnabled ? 'bg-pink-500' : 'bg-slate-700'
                   }`}
                 >
                   <span
@@ -2949,7 +2949,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             </div>
 
             {/* Account */}
-            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-2 text-xs">
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-fuchsia-500/15 space-y-2 text-xs">
               <h3 className="text-sm font-bold text-white">Account</h3>
               <div>User ID: <strong className="text-rose-300 font-mono">{user.id}</strong></div>
               <div>Email: <strong className="text-white">{user.email}</strong></div>

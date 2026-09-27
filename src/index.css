@@ -99,3 +99,128 @@ body,
   background: rgba(225, 29, 72, 0.5);
 }
 
+
+/* ============ Pari AI Neon Theme ============ */
+body {
+  background-color: #05010f;
+  background-image:
+    radial-gradient(ellipse 60% 45% at 10% 0%, rgba(255, 45, 149, 0.14), transparent 70%),
+    radial-gradient(ellipse 55% 50% at 90% 10%, rgba(139, 92, 246, 0.16), transparent 70%),
+    radial-gradient(ellipse 45% 35% at 50% 100%, rgba(34, 211, 238, 0.08), transparent 70%),
+    radial-gradient(ellipse 30% 25% at 85% 88%, rgba(255, 45, 149, 0.07), transparent 70%);
+  background-attachment: fixed;
+}
+
+/* Neon glass panel */
+.pari-panel {
+  background: rgba(12, 9, 32, 0.72);
+  border: 1px solid rgba(232, 121, 249, 0.18);
+  border-radius: 1.5rem;
+  box-shadow: 0 0 32px rgba(192, 38, 211, 0.10), inset 0 0 28px rgba(139, 92, 246, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+/* Neon primary button */
+.pari-btn {
+  background: linear-gradient(135deg, #ff2d95 0%, #d946ef 55%, #8b5cf6 100%);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 0 22px rgba(255, 45, 149, 0.45), 0 4px 14px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  transition: filter 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+.pari-btn:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 0 34px rgba(255, 45, 149, 0.65), 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.pari-btn:active { transform: scale(0.98); }
+
+/* Glowing active nav pill */
+.pari-nav-active {
+  background: linear-gradient(135deg, rgba(255, 45, 149, 0.95), rgba(192, 38, 211, 0.9));
+  color: #fff !important;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 18px rgba(255, 45, 149, 0.55), inset 0 0 12px rgba(255, 255, 255, 0.08);
+  font-weight: 700;
+}
+
+/* Neon input */
+.pari-input {
+  background: rgba(8, 6, 26, 0.85);
+  border: 1px solid rgba(232, 121, 249, 0.22);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.pari-input:focus {
+  outline: none;
+  border-color: rgba(255, 45, 149, 0.7);
+  box-shadow: 0 0 0 3px rgba(255, 45, 149, 0.15), 0 0 18px rgba(255, 45, 149, 0.25);
+}
+
+/* Gradient glow text */
+.pari-glow-text {
+  background: linear-gradient(90deg, #ff7ac8, #e879f9, #a78bfa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Glowing Pari orb (chat empty state) */
+.pari-orb {
+  position: relative;
+  width: 7rem;
+  height: 7rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.75rem;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 0 18px rgba(255, 255, 255, 0.8);
+  background:
+    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.4), transparent 46%),
+    radial-gradient(circle at 50% 58%, #ff2d95 0%, #b026d6 52%, #4c1d95 100%);
+  box-shadow:
+    0 0 42px rgba(255, 45, 149, 0.65),
+    0 0 95px rgba(168, 85, 247, 0.35),
+    inset 0 0 30px rgba(255, 255, 255, 0.14),
+    inset -12px -16px 40px rgba(40, 5, 70, 0.55);
+  animation: pari-orb-float 5s ease-in-out infinite;
+}
+.pari-orb::before {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, transparent 0 38%, rgba(34, 211, 238, 0.85) 50%, transparent 62% 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  animation: pari-orb-spin 7s linear infinite;
+}
+.pari-orb::after {
+  content: '';
+  position: absolute;
+  inset: -27px;
+  border-radius: 9999px;
+  border: 1px solid rgba(232, 121, 249, 0.28);
+  box-shadow: 0 0 24px rgba(232, 121, 249, 0.18);
+}
+@keyframes pari-orb-spin { to { transform: rotate(360deg); } }
+@keyframes pari-orb-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+
+/* Neon scrollbar to match */
+::-webkit-scrollbar-thumb {
+  background: rgba(217, 70, 239, 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 45, 149, 0.55);
+}
+
+/* Neon glow for gradient buttons (unlayered beats Tailwind shadow utilities) */
+.neon-glow-btn {
+  box-shadow: 0 0 22px rgba(255, 45, 149, 0.45), 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.neon-glow-btn:hover {
+  box-shadow: 0 0 34px rgba(255, 45, 149, 0.65), 0 4px 14px rgba(0, 0, 0, 0.4);
+}
