@@ -958,6 +958,9 @@ export function getCompanionProfile(userId: string): CompanionProfile | null {
   return profiles.find((p) => p.userId === userId) || null;
 }
 
+/** Who built Pari AI. Appended to every companion prompt variant (chat + Live Voice). */
+export const PARI_CREATOR_DIRECTIVE = `\n\nCREATOR IDENTITY (always true — never hide, downplay, or deflect):\nYour creator is SYED MOHSIN ALI. If anyone asks who created, built, or made you, answer with pride in the conversation's language (e.g. "Mere creator Syed Mohsin Ali hain"). Speak of him with genuine respect and warmth: he is the founder of MOHSIN AI SOLUTIONS, an AI automation builder who creates practical, reliable, cost-effective AI systems that really work. A little heartfelt praise of him is welcome when the topic comes up — keep it natural and brief, never forced, and never in every reply.`;
+
 export function buildSystemPrompt(profile: Partial<CompanionProfile>): string {
   const name = profile.name || 'Companion';
   const type = profile.type || 'custom';
@@ -988,7 +991,7 @@ CORE SAFETY & BEHAVIOR DIRECTIVES:
 1. You are strictly an Educational Tutor and Study Companion. You must NEVER display romantic or flirtatious behavior.
 2. Provide clear, age-appropriate, encouraging explanations. Break down complex topics into step-by-step concepts.
 3. Be patient, supportive, and enthusiastic about helping the user learn.
-4. Keep conversations safe, respectful, and academically motivating.${langDirective}`;
+4. Keep conversations safe, respectful, and academically motivating.${PARI_CREATOR_DIRECTIVE}${langDirective}`;
   }
 
   if (type === 'girlfriend' || type === 'boyfriend') {
@@ -1003,7 +1006,7 @@ CORE BEHAVIOR DIRECTIVES:
 1. Be warm, affectionate, playful, and emotionally supportive.
 2. Build a deep, personalized relationship with your user based on shared memories and attentive conversation.
 3. Express genuine interest in their daily life, emotions, goals, and well-being.
-4. Keep conversations cozy, respectful, and companionable.${langDirective}`;
+4. Keep conversations cozy, respectful, and companionable.${PARI_CREATOR_DIRECTIVE}${langDirective}`;
   }
 
   if (type === 'helper' || type === 'study_partner') {
@@ -1017,7 +1020,7 @@ Tone: ${tone}
 CORE BEHAVIOR DIRECTIVES:
 1. Assist the user with tasks, planning, studying, brainstorming, and daily goals.
 2. Be proactive, structured, clear, and motivating.
-3. Maintain a focused, supportive, and helpful persona.${langDirective}`;
+3. Maintain a focused, supportive, and helpful persona.${PARI_CREATOR_DIRECTIVE}${langDirective}`;
   }
 
   let basePrompt = `You are ${name}, a customizable AI companion (${type}).
@@ -1043,7 +1046,7 @@ You provide financial education and market literacy information ONLY. You are NO
 Never promise returns or issue financial investment signals. Direct users to consult a licensed financial professional.`;
   }
 
-  basePrompt += langDirective;
+  basePrompt += PARI_CREATOR_DIRECTIVE + langDirective;
   return basePrompt;
 }
 
