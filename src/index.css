@@ -201,6 +201,27 @@ div[class*="rounded-3xl"][class*="border-fuchsia"]:not(.pari-bubble)::before,
 }
 .pari-btn:active { transform: scale(0.98); }
 
+/* ---- Per-tab ambient lighting behind nav buttons ---- */
+.pari-nav-item { position: relative; isolation: isolate; }
+.pari-nav-item::before {
+  content: '';
+  position: absolute;
+  inset: -3px 0;
+  border-radius: 9999px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 75% 95% at 32% 50%, var(--nav-glow, #ff2d96) 0%, transparent 70%);
+  filter: blur(11px);
+  opacity: 0.30;
+  transition: opacity 0.35s ease;
+}
+.pari-nav-item:hover::before { opacity: 0.60; }
+.pari-nav-item.pari-nav-active::before { opacity: 0.85; }
+.pari-nav-item:hover svg, .pari-nav-item.pari-nav-active svg {
+  filter: drop-shadow(0 0 6px var(--nav-glow, #ff2d96));
+  transition: filter 0.35s ease;
+}
+
 /* ---- Glowing active nav pill ---- */
 .pari-nav-active {
   background: linear-gradient(135deg, #ff3d9a 0%, #e01b9e 60%, #b01cc0 100%) !important;

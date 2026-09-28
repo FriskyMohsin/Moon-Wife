@@ -1307,16 +1307,16 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
 
   // ---------- Shared render helpers ----------
 
-  const NAV_ITEMS: { id: TabId; label: string; icon: any }[] = [
-    { id: 'home', label: 'Home', icon: Home },
-    { id: 'chat', label: 'Chat', icon: MessageSquare },
-    { id: 'voice', label: 'Voice Call', icon: Phone },
-    { id: 'tasks', label: 'Tasks', icon: ListTodo },
-    { id: 'reminders', label: 'Reminders', icon: Bell },
-    { id: 'memory', label: 'Memory', icon: Brain },
-    { id: 'files', label: 'Files & Studio', icon: FolderOpen },
-    { id: 'usage', label: 'Usage', icon: BarChart2 },
-    { id: 'settings', label: 'Settings', icon: Settings },
+  const NAV_ITEMS: { id: TabId; label: string; icon: any; glow: string }[] = [
+    { id: 'home', label: 'Home', icon: Home, glow: '#ff2d96' },
+    { id: 'chat', label: 'Chat', icon: MessageSquare, glow: '#a855f7' },
+    { id: 'voice', label: 'Voice Call', icon: Phone, glow: '#22d3ee' },
+    { id: 'tasks', label: 'Tasks', icon: ListTodo, glow: '#34d399' },
+    { id: 'reminders', label: 'Reminders', icon: Bell, glow: '#fbbf24' },
+    { id: 'memory', label: 'Memory', icon: Brain, glow: '#e879f9' },
+    { id: 'files', label: 'Files & Studio', icon: FolderOpen, glow: '#60a5fa' },
+    { id: 'usage', label: 'Usage', icon: BarChart2, glow: '#2dd4bf' },
+    { id: 'settings', label: 'Settings', icon: Settings, glow: '#94a3b8' },
   ];
 
   const PRIORITY_STYLE: Record<string, string> = {
@@ -1450,7 +1450,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs transition-all ${
+                  style={{ ['--nav-glow' as any]: item.glow }}
+                  className={`pari-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs transition-all ${
                     isActive
                       ? 'pari-nav-active'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-fuchsia-500/10'
