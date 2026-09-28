@@ -1482,7 +1482,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           <div className="mt-5 pari-panel rounded-2xl p-3.5 flex items-center gap-3">
             <div className="relative shrink-0">
               <img
-                src="/pari-avatar.png"
+                src="/pari-avatar-face.png"
                 alt="Pari"
                 className="w-14 h-14 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_18px_rgba(255,45,150,0.55)]"
               />
@@ -1556,7 +1556,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {/* Hero */}
               <div className="rounded-3xl border border-fuchsia-500/25 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-rose-950/30 p-6 md:p-8 shadow-2xl">
                 <div className="flex items-center gap-4">
-                  <img src="/pari-avatar.png" alt="Pari" className="w-14 h-14 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_18px_rgba(255,45,150,0.50)] shrink-0" />
+                  <img src="/pari-avatar-face.png" alt="Pari" className="w-14 h-14 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_18px_rgba(255,45,150,0.50)] shrink-0" />
                   <div className="min-w-0">
                     <div className="text-xl md:text-2xl font-bold text-white truncate">
                       {greeting}, {user.name?.split(' ')[0] || 'there'} <span className="text-rose-400">👋</span>
@@ -1662,7 +1662,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {/* Chat Top Bar */}
               <div className="px-6 py-4 border-b border-fuchsia-500/15 flex items-center justify-between bg-slate-950">
                 <div className="flex items-center gap-3">
-                  <img src="/pari-avatar.png" alt="Pari" className="w-9 h-9 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_12px_rgba(255,45,150,0.45)] shrink-0" />
+                  <img src="/pari-avatar-face.png" alt="Pari" className="w-9 h-9 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_12px_rgba(255,45,150,0.45)] shrink-0" />
                   <div>
                     <h3 className="text-sm font-bold text-white">Pari AI</h3>
                     <p className="text-[10px] text-slate-400">Your personal AI companion</p>

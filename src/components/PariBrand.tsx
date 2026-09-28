@@ -22,7 +22,7 @@ export const PariBrand: React.FC<PariBrandProps> = ({
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <img
-        src="/pari-avatar.png"
+        src="/pari-avatar-face.png"
         alt="Pari AI"
         className={`${iconBox} shrink-0 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_14px_rgba(255,45,150,0.50)]`}
       />
