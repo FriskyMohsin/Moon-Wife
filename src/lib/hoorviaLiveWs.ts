@@ -363,8 +363,11 @@ export async function handleHoorviaLiveWsConnection(
       }
 
       try {
+        // Log only the last 4 chars (safe: cannot reconstruct the key) so we can
+        // verify WHICH stored key is being sent vs the one in AI Studio.
+        const keyTail = effectiveApiKey && effectiveApiKey.length > 4 ? effectiveApiKey.slice(-4) : 'n/a';
         console.log(
-          `[Hoorvia Live WS] Connecting user ${userId} to Live model ${modelCandidate} (attempt ${attempt + 1})`
+          `[Hoorvia Live WS] Connecting user ${userId} to Live model ${modelCandidate} (attempt ${attempt + 1}) keyFp=${cred?.fingerprint || 'none'} keyTail=...${keyTail} credStatus=${cred?.status || 'n/a'}`
         );
 
         // Hard timeout + fail-fast on Google-side close during handshake:
