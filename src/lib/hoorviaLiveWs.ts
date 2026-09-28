@@ -367,7 +367,20 @@ export async function handleHoorviaLiveWsConnection(
           `[Hoorvia Live WS] Connecting user ${userId} to Live model ${modelCandidate} (attempt ${attempt + 1})`
         );
 
-        liveSession = await ai.live.connect({
+        // Hard timeout + fail-fast on Google-side close during handshake:
+        // without these, a hanging upstream or an auth rejection (Google
+        // closes with 1008 while the SDK promise stays pending) leaves the
+        // client stuck on "connecting" forever with no error and no close.
+        const CONNECT_TIMEOUT_MS = 25000;
+        let connectTimedOut = false;
+        let connectSettled = false;
+        let rejectConnect: (e: any) => void = () => {};
+        const abortPromise = new Promise<never>((_, reject) => { rejectConnect = reject; });
+        const connectTimer = setTimeout(() => {
+          connectTimedOut = true;
+          rejectConnect(new Error(`CONNECT_TIMEOUT: no response from Google Live API within ${CONNECT_TIMEOUT_MS / 1000}s`));
+        }, CONNECT_TIMEOUT_MS);
+        const connectPromise = ai.live.connect({
           model: modelCandidate,
           config: {
             responseModalities: [Modality.AUDIO],
@@ -475,6 +488,14 @@ export async function handleHoorviaLiveWsConnection(
               console.log(
                 `[GOOGLE_WS_CLOSE] code=${closeEvent?.code || 'normal'} reason=${closeEvent?.reason || ''} user=${userId}`
               );
+              if (!connectSettled) {
+                // Google closed during the handshake (e.g. 1008 invalid auth
+                // credentials). The SDK promise may never settle on its own,
+                // so fail the connect race immediately with the real reason.
+                rejectConnect(new Error(
+                  `GOOGLE_CLOSED_DURING_CONNECT code=${closeEvent?.code || 'unknown'} reason=${(closeEvent?.reason || '').toString().slice(0, 200)}`
+                ));
+              }
               isConnected = false;
               if (clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(JSON.stringify({ type: 'closed' }));
@@ -482,6 +503,22 @@ export async function handleHoorviaLiveWsConnection(
             },
           },
         });
+
+        liveSession = await Promise.race([connectPromise, abortPromise])
+          .catch((err) => {
+            if (connectTimedOut) {
+              // If the late promise ever resolves, close the leaked session.
+              connectPromise.then(
+                (s: any) => { try { s?.close(); } catch { /* ignore */ } },
+                () => { /* ignore */ }
+              );
+            }
+            throw err;
+          })
+          .finally(() => {
+            connectSettled = true;
+            clearTimeout(connectTimer);
+          });
 
         selectedLiveModel = modelCandidate;
         isConnected = true;
@@ -501,6 +538,15 @@ export async function handleHoorviaLiveWsConnection(
           errStr.includes('high demand') ||
           errStr.includes('temporarily unavailable');
 
+        const isAuthFailure =
+          errStr.includes('GOOGLE_CLOSED_DURING_CONNECT') &&
+          /invalid authentication|invalid credential|1008|unauthorized|api key not valid/i.test(errStr);
+
+        if (isAuthFailure) {
+          // Key is dead — other models will fail the same way, stop immediately.
+          break;
+        }
+
         if (!is503) {
           // Not a temporary 503, try next live model candidate immediately
           break;
@@ -508,7 +554,7 @@ export async function handleHoorviaLiveWsConnection(
       }
     }
 
-    if (isConnected) break;
+    if (isConnected || connectionError && /GOOGLE_CLOSED_DURING_CONNECT/.test(connectionError?.message || '')) break;
   }
 
   if (!isConnected || !liveSession) {
@@ -519,9 +565,18 @@ export async function handleHoorviaLiveWsConnection(
       errStr.includes('high demand') ||
       errStr.includes('temporarily unavailable');
 
+    const isTimeout = errStr.includes('CONNECT_TIMEOUT');
+    const isAuthRejected =
+      errStr.includes('GOOGLE_CLOSED_DURING_CONNECT') &&
+      /invalid authentication|invalid credential|1008|unauthorized|api key not valid/i.test(errStr);
+
     const userErrorMessage = is503
       ? 'Live Voice is temporarily unavailable. Please try again shortly.'
-      : 'Live Voice is not available with your current AI provider/model access.';
+      : isTimeout
+        ? 'Google Live did not respond in time. Check your internet connection and API key, then try again.'
+        : isAuthRejected
+          ? 'Google rejected your API key. Please generate a fresh Gemini API key and reconnect it in Settings → Provider Settings.'
+          : 'Live Voice is not available with your current AI provider/model access.';
 
     console.error(`[Hoorvia Live WS] Live connection failed for user ${userId}:`, userErrorMessage);
 
