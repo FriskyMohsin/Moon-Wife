@@ -289,6 +289,16 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     step?: string;
     error?: string;
     screenshot?: string;
+    title?: string;
+    url?: string;
+    ms?: number;
+    shotFile?: string | null;
+    playback?: {
+      before: { paused?: boolean; currentTime?: number; readyState?: number };
+      playResult?: string;
+      after: { paused?: boolean; currentTime?: number; readyState?: number };
+      verified: boolean;
+    };
   } | null>(null);
 
   // Live Voice state & engine (existing GeminiLiveAudioManager + /api/hoorvia/live-ws infra)
@@ -2722,7 +2732,26 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     <span>Visible window: <span className={browserTest.headlessEffective ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>{browserTest.headlessEffective ? 'OFF (headless)' : 'ON'}</span></span>
                   </div>
                   {browserTest.ok ? (
-                    <p className="text-emerald-400 font-semibold">YouTube opened successfully.</p>
+                    <div className="space-y-1">
+                      <p className="text-emerald-400 font-semibold">
+                        {browserTest.step === 'playback-verified'
+                          ? 'YouTube video is REALLY playing — verified from the player, not assumed.'
+                          : 'YouTube opened successfully.'}
+                      </p>
+                      {browserTest.title && (
+                        <p className="text-slate-400">Video: <span className="text-slate-200">{browserTest.title}</span></p>
+                      )}
+                      {browserTest.playback && (
+                        <p className="text-slate-400 font-mono text-[11px]">
+                          paused: {String(browserTest.playback.before.paused)} → {String(browserTest.playback.after.paused)}
+                          {' · '}t: {(browserTest.playback.before.currentTime ?? 0).toFixed(1)}s → {(browserTest.playback.after.currentTime ?? 0).toFixed(1)}s
+                          {typeof browserTest.ms === 'number' ? ` · ${Math.round(browserTest.ms / 100) / 10}s` : ''}
+                        </p>
+                      )}
+                      {browserTest.playback?.playResult && (
+                        <p className="text-slate-500 text-[11px]">{browserTest.playback.playResult}</p>
+                      )}
+                    </div>
                   ) : (
                     <p className="text-red-400 font-semibold">Failed{browserTest.step ? ` at step: ${browserTest.step}` : ''} — {browserTest.error || 'unknown error'}</p>
                   )}

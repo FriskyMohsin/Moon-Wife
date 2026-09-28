@@ -435,6 +435,47 @@ export async function browserPress(userId: string, key: string): Promise<Browser
   });
 }
 
+export interface VideoState {
+  videoFound: boolean;
+  readyState?: number;
+  paused?: boolean;
+  currentTime?: number;
+  duration?: number;
+}
+
+async function readVideoState(page: Page): Promise<VideoState> {
+  try {
+    const s = await page.evaluate(() => {
+      const v = document.querySelector('video') as HTMLVideoElement | null;
+      if (!v) return { videoFound: false };
+      return {
+        videoFound: true,
+        readyState: v.readyState,
+        paused: v.paused,
+        currentTime: v.currentTime,
+        duration: Number.isFinite(v.duration) ? v.duration : 0,
+      };
+    });
+    return s as VideoState;
+  } catch {
+    return { videoFound: false };
+  }
+}
+
+/** Read the <video> playback state of the user's current page (diagnostics). */
+export async function browserVideoState(
+  userId: string
+): Promise<{ ok: boolean; message?: string; title?: string; url?: string } & VideoState> {
+  try {
+    const session = await resolveSession(userId);
+    const state = await readVideoState(session.page);
+    const { url, title } = await currentUrlAndTitle(session.page);
+    return { ok: true, url, title: title || undefined, ...state };
+  } catch (err) {
+    return { ok: false, message: `Could not read video state: ${describeError(err)}`, videoFound: false };
+  }
+}
+
 export async function browserYoutube(
   userId: string,
   action: YoutubeAction,
@@ -450,12 +491,40 @@ export async function browserYoutube(
     if (!host.endsWith('youtube.com') && !host.endsWith('youtu.be')) {
       return { ok: false, message: 'Not on YouTube — open a YouTube watch page first.' };
     }
+    const before = await readVideoState(page);
+    if (!before.videoFound) {
+      const { url: finalUrl, title } = await currentUrlAndTitle(page);
+      return { ok: false, message: 'No video element found on this YouTube page yet — the player may still be loading.', url: finalUrl, title: title || undefined };
+    }
     const keys = youtubeActionToKeys(action);
     for (const key of keys) {
       await page.keyboard.press(key);
     }
+    await page.waitForTimeout(1500);
+    const after = await readVideoState(page);
     const { url: finalUrl, title } = await currentUrlAndTitle(page);
-    return { ok: true, message: `YouTube ${action} sent.`, url: finalUrl, title: title || undefined };
+    // Report what ACTUALLY happened, not what was requested.
+    let outcome: string;
+    if (action === 'play' || action === 'pause') {
+      const wantPlaying = action === 'play';
+      const isPlaying = after.paused === false;
+      outcome =
+        isPlaying === wantPlaying
+          ? `video is now ${isPlaying ? 'playing' : 'paused'} (t=${(after.currentTime || 0).toFixed(1)}s).`
+          : `WARNING: asked to ${action} but video is still ${after.paused ? 'paused' : 'playing'} (t=${(after.currentTime || 0).toFixed(1)}s).`;
+    } else if (action === 'stop') {
+      outcome = after.paused ? 'video stopped.' : 'WARNING: video still playing after stop.';
+    } else {
+      const moved = (after.currentTime || 0) - (before.currentTime || 0);
+      outcome = `seek ${action === 'seek_forward_10' ? '+10s' : '−10s'}: t=${(before.currentTime || 0).toFixed(1)}s → ${(after.currentTime || 0).toFixed(1)}s${Math.abs(moved) < 0.5 ? ' (WARNING: position barely moved)' : ''}.`;
+    }
+    const failed = /WARNING/.test(outcome);
+    return {
+      ok: !failed,
+      message: `YouTube ${action}: ${outcome}`,
+      url: finalUrl,
+      title: title || undefined,
+    };
   });
 }
 

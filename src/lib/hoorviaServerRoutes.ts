@@ -2,6 +2,7 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { resolveDataPath } from './runtimePaths';
 import { GoogleGenAI } from '@google/genai';
 import {
   initHoorviaPlatform,
@@ -85,6 +86,9 @@ import { listModelKeys, saveModelKey, deleteModelKey, resolveModelKeyForUser } f
 import {
   saveUserFile,
   getUserFile,
+  getUserFileMeta,
+  removeUserFileMeta,
+  getUserFileStorageDiag,
   listUserFiles,
   slugifyFilenameStem,
   buildPptx,
@@ -101,6 +105,8 @@ import {
   closeBrowserSession,
   browserOpen,
   browserScreenshot,
+  browserVideoState,
+  browserYoutube,
 } from './pariBrowser';
 import { execSync } from 'child_process';
 import { searchVideos, searchArticles } from './contentSearch';
@@ -1341,9 +1347,27 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
     }
   });
 
+  // --- File storage diagnostics: metadata entries vs bytes actually on disk.
+  // --- If downloads ever 404 again, this shows exactly where the gap is.
+  // --- (Registered before /files/:id so "diag" is not captured as an id.)
+  app.get('/api/hoorvia/client/files/diag', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    res.json({ status: 'ok', ...getUserFileStorageDiag(req.hoorviaUser!.id) });
+  });
+
   app.get('/api/hoorvia/client/files/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
     const found = getUserFile(req.hoorviaUser!.id, req.params.id);
-    if (!found) return res.status(404).json({ error: 'File not found.' });
+    if (!found) {
+      // Self-heal: metadata exists but the bytes are gone from disk — drop the
+      // stale entry so this URL can never 404 again, and say so plainly.
+      if (getUserFileMeta(req.hoorviaUser!.id, req.params.id)) {
+        removeUserFileMeta(req.hoorviaUser!.id, req.params.id);
+        return res.status(410).json({
+          error: 'This file is no longer on disk and was removed from your library.',
+          removed: true,
+        });
+      }
+      return res.status(404).json({ error: 'File not found.' });
+    }
     res.setHeader('Content-Type', found.meta.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${found.meta.filename}"`);
     return res.sendFile(found.absPath);
@@ -1489,7 +1513,10 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
   });
 
   // --- Browser self-test: one click proves which code is live, whether the
-  // --- browser is headed, and that YouTube really opens (with screenshot).
+  // --- browser is headed, and that a REAL YouTube video loads AND plays
+  // --- (playback state is read from the <video> element, not assumed).
+  // --- Big Buck Bunny (Blender Foundation) is the standard test video.
+  const SELFTEST_VIDEO_URL = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
   app.get('/api/hoorvia/client/browser/selftest', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.hoorviaUser!.id;
     const headlessEnv = process.env.PARI_BROWSER_HEADLESS;
@@ -1499,13 +1526,54 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
       commit = execSync('git rev-parse --short HEAD', { cwd: process.cwd(), timeout: 8000 }).toString().trim() || 'unknown';
     } catch (_) { /* not a git checkout — leave as unknown */ }
     const base = { commit, headlessEnv: headlessEnv ?? '(not set)', headlessEffective };
+    const t0 = Date.now();
     try {
-      const opened = await browserOpen(userId, 'https://www.youtube.com');
+      const opened = await browserOpen(userId, SELFTEST_VIDEO_URL);
       if (!opened.ok) {
         return res.json({ ...base, ok: false, step: 'open', error: opened.message });
       }
+      // Poll for the player: YouTube is an SPA, domcontentloaded is not enough.
+      let state: any = { videoFound: false };
+      const deadline = Date.now() + 25000;
+      while (Date.now() < deadline) {
+        state = await browserVideoState(userId);
+        if (state.videoFound && (state.readyState || 0) >= 2) break;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      if (!state.videoFound) {
+        const png = await browserScreenshot(userId).catch(() => null);
+        return res.json({
+          ...base, ok: false, step: 'player', title: state.title || opened.title,
+          error: 'Timed out waiting for the YouTube video element (consent wall or player failed to load).',
+          screenshot: png ? `data:image/png;base64,${png.toString('base64')}` : null,
+        });
+      }
+      const before = { paused: state.paused, currentTime: state.currentTime, readyState: state.readyState };
+      const playResult = await browserYoutube(userId, 'play');
+      await new Promise((r) => setTimeout(r, 2500));
+      const afterState: any = await browserVideoState(userId);
+      const after = { paused: afterState.paused, currentTime: afterState.currentTime, readyState: afterState.readyState };
+      const advanced = (after.currentTime || 0) > (before.currentTime || 0) + 0.3;
+      const playbackVerified = afterState.videoFound && after.paused === false && advanced;
       const png = await browserScreenshot(userId);
-      return res.json({ ...base, ok: true, screenshot: `data:image/png;base64,${png.toString('base64')}` });
+      // Persist the evidence screenshot to disk (data/browser-shots/).
+      let shotFile: string | null = null;
+      try {
+        const shotName = `selftest-${Date.now()}.png`;
+        fs.writeFileSync(resolveDataPath('hoorvia_platform', 'browser-shots', shotName), png);
+        shotFile = `browser-shots/${shotName}`;
+      } catch (_) { /* evidence save is best-effort */ }
+      return res.json({
+        ...base,
+        ok: playbackVerified,
+        step: playbackVerified ? 'playback-verified' : 'playback-failed',
+        title: afterState.title || opened.title,
+        url: afterState.url,
+        ms: Date.now() - t0,
+        playback: { before, playResult: playResult.message, after, verified: playbackVerified },
+        shotFile,
+        screenshot: `data:image/png;base64,${png.toString('base64')}`,
+      });
     } catch (err: any) {
       console.error('[PariAI] browser selftest failed:', err?.message || err);
       return res.json({ ...base, ok: false, step: 'launch', error: err?.message || String(err) });

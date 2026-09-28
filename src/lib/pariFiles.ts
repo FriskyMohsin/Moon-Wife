@@ -18,7 +18,7 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } fro
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
 import EPub from 'epub-gen';
-import { resolveDataPath } from './runtimePaths';
+import { resolveDataPath, getDataDir } from './runtimePaths';
 import { generateTextWithUserKey, extractJsonPayload, pariLoad, pariSave, pariId } from './pariStore';
 
 export const MANUSCRIPT_NOTICE =
@@ -89,12 +89,36 @@ export function saveUserFile(
 ): PariFileMeta {
   const dir = safeUserDir(userId);
   fs.mkdirSync(dir, { recursive: true });
-  const absPath = path.join(dir, filename);
+  // Never silently overwrite: two metadata entries must never point at the
+  // same bytes (the older entry would then serve the newer file's content).
+  let finalName = filename;
+  let absPath = path.join(dir, finalName);
+  if (fs.existsSync(absPath)) {
+    const ext = path.extname(finalName);
+    const stem = path.basename(finalName, ext) || 'file';
+    let n = 2;
+    do {
+      finalName = `${stem}-${n}${ext}`;
+      absPath = path.join(dir, finalName);
+      n++;
+    } while (fs.existsSync(absPath) && n < 10000);
+  }
   fs.writeFileSync(absPath, buffer);
+  // Verify the bytes actually landed before recording metadata — a torn or
+  // failed write must 500 here, never create a metadata-without-file ghost.
+  const stat = fs.statSync(absPath);
+  if (stat.size !== buffer.length) {
+    try {
+      fs.unlinkSync(absPath);
+    } catch (_) {}
+    throw new Error(
+      `File write verification failed for ${finalName} (expected ${buffer.length} bytes, found ${stat.size}).`
+    );
+  }
   const meta: PariFileMeta = {
     id: pariId('file'),
     userId,
-    filename,
+    filename: finalName,
     mimeType,
     size: buffer.length,
     kind,
@@ -104,6 +128,38 @@ export function saveUserFile(
   metas.push(meta);
   saveMeta(metas);
   return meta;
+}
+
+/** Fetch a file's metadata only if it belongs to the requesting user. */
+export function getUserFileMeta(userId: string, fileId: string): PariFileMeta | null {
+  return loadMeta().find((m) => m.id === fileId && m.userId === userId) || null;
+}
+
+/** Remove one metadata entry (self-heal for ghosts: meta exists, bytes gone). */
+export function removeUserFileMeta(userId: string, fileId: string): boolean {
+  const metas = loadMeta();
+  const idx = metas.findIndex((m) => m.id === fileId && m.userId === userId);
+  if (idx < 0) return false;
+  metas.splice(idx, 1);
+  saveMeta(metas);
+  return true;
+}
+
+/** Storage diagnostics: metadata entries vs files actually on disk. */
+export function getUserFileStorageDiag(userId: string): {
+  dataDir: string;
+  metaCount: number;
+  onDiskCount: number;
+  ghosts: Array<{ id: string; filename: string }>;
+} {
+  const metas = listUserFiles(userId);
+  const ghosts: Array<{ id: string; filename: string }> = [];
+  let onDiskCount = 0;
+  for (const m of metas) {
+    if (fs.existsSync(path.join(safeUserDir(userId), m.filename))) onDiskCount++;
+    else ghosts.push({ id: m.id, filename: m.filename });
+  }
+  return { dataDir: getDataDir(), metaCount: metas.length, onDiskCount, ghosts };
 }
 
 /** Fetch a file only if it belongs to the requesting user. */
