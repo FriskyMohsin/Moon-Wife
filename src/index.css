@@ -118,7 +118,7 @@ body {
 .cosmic-bg .bg-photo {
   position: absolute;
   inset: 0;
-  background: url(/cosmic-bg.jpg) center 30% / cover no-repeat;
+  background: url(/neon-room-bg.jpg) center 30% / cover no-repeat;
 }
 .cosmic-bg .bg-shade {
   position: absolute;
@@ -201,22 +201,21 @@ div[class*="rounded-3xl"][class*="border-fuchsia"]:not(.pari-bubble)::before,
 }
 .pari-btn:active { transform: scale(0.98); }
 
-/* ---- Per-tab ambient lighting behind nav buttons ---- */
-.pari-nav-item { position: relative; isolation: isolate; }
-.pari-nav-item::before {
+/* ---- Active nav button: neon border light (inactive buttons stay clean) ---- */
+.pari-nav-item { position: relative; }
+.pari-nav-active { position: relative; }
+.pari-nav-active::after {
   content: '';
   position: absolute;
-  inset: -3px 0;
+  inset: 0;
   border-radius: 9999px;
-  z-index: -1;
+  border: 2px solid var(--nav-glow, #ff2d96);
+  box-shadow:
+    0 0 10px var(--nav-glow, #ff2d96),
+    0 0 28px color-mix(in srgb, var(--nav-glow, #ff2d96) 55%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--nav-glow, #ff2d96) 35%, transparent);
   pointer-events: none;
-  background: radial-gradient(ellipse 75% 95% at 32% 50%, var(--nav-glow, #ff2d96) 0%, transparent 70%);
-  filter: blur(11px);
-  opacity: 0.30;
-  transition: opacity 0.35s ease;
 }
-.pari-nav-item:hover::before { opacity: 0.60; }
-.pari-nav-item.pari-nav-active::before { opacity: 0.85; }
 .pari-nav-item:hover svg, .pari-nav-item.pari-nav-active svg {
   filter: drop-shadow(0 0 6px var(--nav-glow, #ff2d96));
   transition: filter 0.35s ease;
