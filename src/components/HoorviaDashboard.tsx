@@ -1533,6 +1533,10 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           >
             <LogOut className="w-3.5 h-3.5" /> Log Out
           </button>
+          {/* Dev build tag — shows which HEAD this UI was built from. Remove before go-live. */}
+          <div className="pt-1 text-center text-[9px] font-mono text-slate-600 select-none">
+            build {__PARI_BUILD_COMMIT__}
+          </div>
         </div>
       </aside>
 
