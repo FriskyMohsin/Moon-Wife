@@ -235,6 +235,12 @@ div[class*="rounded-3xl"][class*="border-fuchsia"]:not(.pari-bubble)::before,
   filter: drop-shadow(0 0 14px rgba(255, 45, 150, 0.55));
 }
 
+/* ---- Pill buttons: every button fully round, never rectangular.
+   Card-style buttons opt out with .keep-rect ---- */
+button:not(.keep-rect) {
+  border-radius: 9999px !important;
+}
+
 /* ---- Glowing Pari orb: glossy planet + Saturn ring + platform glow ---- */
 .pari-orb {
   position: relative;
@@ -289,6 +295,22 @@ div[class*="rounded-3xl"][class*="border-fuchsia"]:not(.pari-bubble)::before,
 @keyframes pari-orb-float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-10px); }
+}
+
+/* ---- Pari character image floating inside the orb ---- */
+.pari-orb-img {
+  position: relative;
+  z-index: 3;
+  height: 96%;
+  width: auto;
+  max-width: 96%;
+  object-fit: contain;
+  filter: drop-shadow(0 0 26px rgba(255, 45, 150, 0.55));
+  animation: orbImgFloat 5s ease-in-out infinite;
+}
+@keyframes orbImgFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
 }
 
 /* ---- Neon scrollbar to match ---- */

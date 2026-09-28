@@ -1477,6 +1477,26 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               </button>
             )}
           </nav>
+
+          {/* Pari companion card */}
+          <div className="mt-5 pari-panel rounded-2xl p-3.5 flex items-center gap-3">
+            <div className="relative shrink-0">
+              <img
+                src="/pari-avatar.png"
+                alt="Pari"
+                className="w-14 h-14 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_18px_rgba(255,45,150,0.55)]"
+              />
+              <span className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-[#160a2e] shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse" />
+            </div>
+            <div className="min-w-0 relative z-[2]">
+              <p className="text-sm font-bold text-white leading-tight">
+                Pari <span className="ml-1 text-[10px] font-semibold text-emerald-300">● Online</span>
+              </p>
+              <p className="text-[11px] text-slate-300/80 leading-snug mt-1">
+                Always here for you, day and night.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Footer Logout */}
@@ -1536,9 +1556,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {/* Hero */}
               <div className="rounded-3xl border border-fuchsia-500/25 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-rose-950/30 p-6 md:p-8 shadow-2xl">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-pink-500 to-fuchsia-600 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
-                    P
-                  </div>
+                  <img src="/pari-avatar.png" alt="Pari" className="w-14 h-14 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_18px_rgba(255,45,150,0.50)] shrink-0" />
                   <div className="min-w-0">
                     <div className="text-xl md:text-2xl font-bold text-white truncate">
                       {greeting}, {user.name?.split(' ')[0] || 'there'} <span className="text-rose-400">👋</span>
@@ -1562,7 +1580,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                     <button
                       key={qa.id}
                       onClick={() => setActiveTab(qa.tab)}
-                      className="text-left p-4 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60 hover:border-fuchsia-400/40 hover:bg-slate-900 transition group"
+                      className="keep-rect text-left p-4 rounded-2xl border border-fuchsia-500/15 bg-slate-900/60 hover:border-fuchsia-400/40 hover:bg-slate-900 transition group"
                     >
                       <qa.icon className="w-6 h-6 text-rose-400 mb-2 group-hover:scale-110 transition" />
                       <div className="font-semibold text-white text-sm">{qa.label}</div>
@@ -1644,9 +1662,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               {/* Chat Top Bar */}
               <div className="px-6 py-4 border-b border-fuchsia-500/15 flex items-center justify-between bg-slate-950">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-pink-500 to-fuchsia-600 flex items-center justify-center font-bold text-white">
-                    P
-                  </div>
+                  <img src="/pari-avatar.png" alt="Pari" className="w-9 h-9 rounded-full object-cover object-top border border-fuchsia-400/50 shadow-[0_0_12px_rgba(255,45,150,0.45)] shrink-0" />
                   <div>
                     <h3 className="text-sm font-bold text-white">Pari AI</h3>
                     <p className="text-[10px] text-slate-400">Your personal AI companion</p>
@@ -1715,7 +1731,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
               >
                 {chatMessages.length === 0 ? (
                   <div className="text-center py-14 text-slate-500 text-xs space-y-4" dir="ltr">
-                    <div className="pari-orb mx-auto">P</div>
+                    <div className="pari-orb mx-auto"><img src="/pari-avatar.png" alt="Pari" className="pari-orb-img" /></div>
                     <p className="text-xl font-bold pt-6">
                       Say hi to <span className="pari-glow-text">Pari AI</span> <span className="text-white">👋</span>
                     </p>
