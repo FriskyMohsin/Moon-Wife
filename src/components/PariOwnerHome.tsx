@@ -20,6 +20,7 @@ import { HoorviaDashboard } from './HoorviaDashboard';
 import { HoorviaWhatsAppManager } from './HoorviaWhatsAppManager';
 import { HoorviaTelegramManager } from './HoorviaTelegramManager';
 import { CameraManager } from '../lib/cameraManager';
+import { useLiveVoice } from '../hooks/useLiveVoice';
 
 interface PariOwnerHomeProps {
   token: string;
@@ -62,8 +63,23 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [showPariReply, setShowPariReply] = useState<string | null>(null);
   const [isSendingPhoto, setIsSendingPhoto] = useState(false);
-  const [showCallOverlay, setShowCallOverlay] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Inline live voice — call happens right here on home, no redirect/panel
+  const {
+    liveState,
+    liveStatus,
+    liveError,
+    audioLevel,
+    liveDuration,
+    isLive,
+    toggleLive,
+  } = useLiveVoice({
+    auth: token,
+    voice: initialCompanion?.voice || 'Aoede',
+    aiName: 'Maryam',
+    hasBYOK: true, // owner always has server key access
+  });
 
   const openTab = (t: OwnerTab) => {
     setTab(t);
@@ -196,31 +212,21 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   // ---------- Home: full-screen video-call style ----------
   return (
     <div className="relative min-h-screen bg-black overflow-hidden">
-      {/* Maryam full-screen - animated talking video, never cropped */}
+      {/* Maryam full-screen - landscape talking video, fills screen */}
       <div className="absolute inset-0 overflow-hidden bg-black">
-        {/* Blurred fill background */}
         <video
-          src="/maryam-avatar-talking.mp4"
+          src="/maryam-landscape-talking.mp4"
           autoPlay
           loop
           muted
           playsInline
-          className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-60 scale-110"
-        />
-        {/* Sharp full video on top */}
-        <video
-          src="/maryam-avatar-talking.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-contain"
+          className="absolute inset-0 w-full h-full object-cover"
         />
         {/* Fallback static image if video fails */}
         <img
-          src="/maryam-avatar.png"
+          src="/maryam-landscape.png"
           alt="Maryam"
-          className="w-full h-full object-contain absolute inset-0 -z-10"
+          className="w-full h-full object-cover absolute inset-0 -z-10"
           draggable={false}
         />
       </div>
@@ -325,19 +331,35 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
 
         <div className="flex flex-col items-center gap-1.5">
           <button
-            onClick={() => setShowCallOverlay(true)}
-            title="Maryam se live baat karo"
-            className="p-6 rounded-full bg-gradient-to-br from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-2xl shadow-rose-900/50 transition-all hover:scale-105 active:scale-95"
+            onClick={toggleLive}
+            title={isLive ? 'Call band karo' : 'Maryam se live baat karo'}
+            className={`p-6 rounded-full text-white shadow-2xl transition-all hover:scale-105 active:scale-95 ${
+              isLive
+                ? 'bg-gradient-to-br from-red-500 to-red-600 shadow-red-900/50 animate-pulse'
+                : 'bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-emerald-900/50'
+            }`}
           >
-            <Phone size={30} />
+            {isLive ? <PhoneOff size={30} /> : <Phone size={30} />}
           </button>
-          <span className="text-[10px] text-white font-semibold">Talk to Maryam</span>
+          <span className="text-[10px] text-white font-semibold">
+            {isLive
+              ? liveState === 'SPEAKING'
+                ? 'Maryam bol rahi hai...'
+                : liveState === 'LISTENING'
+                  ? `Sun rahi hai • ${Math.floor(liveDuration / 60)}:${String(liveDuration % 60).padStart(2, '0')}`
+                  : liveState === 'CONNECTING'
+                    ? 'Connect ho raha...'
+                    : liveState === 'ERROR'
+                      ? 'Error — dobara try karo'
+                      : 'Call band karo'
+              : 'Talk to Maryam'}
+          </span>
         </div>
 
         <div className="flex flex-col items-center gap-1.5">
           <button
             onClick={() => openTab('chats')}
-            title="Pari se chat karo"
+            title="Maryam se chat karo"
             className="p-4 rounded-full bg-white/15 text-white backdrop-blur hover:bg-white/25 shadow-xl transition-all"
           >
             <MessageCircle size={22} />
@@ -349,43 +371,6 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
       {/* Bottom nav */}
       <OwnerBottomNav activeTab={tab} onSelect={openTab} />
 
-      {/* Inline call overlay - voice call right here, no redirect */}
-      {showCallOverlay && (
-        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col animate-fadeIn">
-          <div className="flex items-center justify-between px-5 pt-5">
-            <div className="flex items-center gap-3">
-              <video
-                src="/maryam-avatar-talking.mp4"
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-12 h-12 rounded-full object-cover border-2 border-rose-500/50"
-              />
-              <div>
-                <p className="text-white font-bold text-sm">Maryam 💛</p>
-                <p className="text-emerald-400 text-xs">Live call...</p>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowCallOverlay(false)}
-              title="Call band karo"
-              className="p-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-xl"
-            >
-              <PhoneOff size={20} />
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <HoorviaDashboard
-              token={token}
-              user={user}
-              initialCompanion={initialCompanion}
-              onLogout={onLogout}
-              initialTab="voice"
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };
