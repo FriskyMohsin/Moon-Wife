@@ -1124,7 +1124,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     setBrowserTestLoading(true);
     setBrowserTest(null);
     try {
-      const res = await fetch('/api/hoorvia/client/browser/selftest');
+      const res = await fetch('/api/hoorvia/client/browser/selftest', { headers: authHeaders(token) });
       const data = await res.json();
       setBrowserTest(data);
     } catch (err: any) {
