@@ -1499,6 +1499,10 @@ export default function App() {
     setHoorviaUser(data.user);
     setHoorviaCompanion(data.companion);
     storeOwnerSession(data);
+    // If this is an owner login (via any method), open Pari Owner Home directly
+    if (data.user && data.user.role === 'owner' && data.user.id === 'usr_mohsin_owner') {
+      setShowPariHome(true);
+    }
   };
 
   const handleHoorviaLogout = () => {
