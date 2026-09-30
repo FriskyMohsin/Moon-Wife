@@ -96,6 +96,7 @@ interface HoorviaDashboardProps {
   initialCompanion: CompanionProfile;
   onLogout: () => void;
   onOpenOwnerAdmin?: () => void;
+  initialTab?: TabId;
 }
 
 const authHeaders = (token: string): HeadersInit => ({ 'X-Hoorvia-Token': token });
@@ -190,8 +191,9 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   initialCompanion,
   onLogout,
   onOpenOwnerAdmin,
+  initialTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabId>('home');
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab || 'home');
 
   const [companion, setCompanion] = useState<CompanionProfile>(() => ({
     ...initialCompanion,

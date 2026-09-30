@@ -56,6 +56,7 @@ import { HoorviaLanding } from './components/HoorviaLanding';
 import { HoorviaDashboard } from './components/HoorviaDashboard';
 import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
 import { PariOwnerDashboard } from './components/PariOwnerDashboard';
+import { PariOwnerHome } from './components/PariOwnerHome';
 import { DesktopShell } from './components/desktop/DesktopShell';
 import {
   getOwnerToken,
@@ -92,6 +93,7 @@ export default function App() {
   });
   const [showOwnerAdmin, setShowOwnerAdmin] = useState<boolean>(false);
   const [showFullAdmin, setShowFullAdmin] = useState<boolean>(false);
+  const [showPariHome, setShowPariHome] = useState<boolean>(false);
 
   // Application State
   const [memory, setMemory] = useState<MemoryBank>(loadMemoryBank);
@@ -566,8 +568,7 @@ export default function App() {
           if (session.user) {
             setHoorviaUser(session.user);
             if (session.user.role === 'owner' && session.user.id === 'usr_mohsin_owner') {
-              setPlatformMode('mohsin_maryam');
-              try { localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam'); } catch {}
+              setShowPariHome(true);
             }
           }
           if (session.companion) setHoorviaCompanion(session.companion);
@@ -1555,6 +1556,7 @@ export default function App() {
     setHoorviaUser(null);
     setHoorviaCompanion(null);
     setShowOwnerAdmin(false);
+    setShowPariHome(false);
     setIsGuestMode(false);
     setMessages([]);
     try {
@@ -1586,6 +1588,33 @@ export default function App() {
     );
   }
 
+  // Render Pari Owner Home (video-call style) right after owner login
+  if (showPariHome && isVerifiedOwner) {
+    return (
+      <PariOwnerHome
+        token={hoorviaToken || ''}
+        user={hoorviaUser}
+        initialCompanion={
+          hoorviaCompanion || {
+            name: 'Pari AI',
+            type: 'pari_assistant',
+            gender: 'female',
+            voice: 'Aoede',
+            language: 'English',
+            personality: 'Pari AI — your personal AI companion. Warm, helpful, and proactive.',
+            systemPrompt: 'You are Pari AI, a warm and helpful personal AI companion.',
+            tone: 'Friendly',
+          }
+        }
+        onLogout={() => {
+          setShowPariHome(false);
+          handleHoorviaLogout();
+        }}
+        onOpenOwnerAdmin={() => setShowOwnerAdmin(true)}
+      />
+    );
+  }
+
   // Render warm Owner Dashboard (AI-Wife style) if explicitly opened (only if verified)
   if (showOwnerAdmin && isVerifiedOwner) {
     return (
@@ -1606,8 +1635,7 @@ export default function App() {
           onLoginSuccess={handleHoorviaLoginSuccess}
           onOwnerAuthenticated={(data) => {
             handleHoorviaLoginSuccess(data);
-            setPlatformMode('mohsin_maryam');
-            localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam');
+            setShowPariHome(true);
           }}
         />
       );

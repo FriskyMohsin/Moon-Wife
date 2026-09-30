@@ -771,10 +771,13 @@ Output ONLY raw JSON with no markdown formatting or code fences.`;
 
   // --- PUBLIC CHAT ENDPOINT ---
   app.post('/api/hoorvia/chat', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    const { message, model } = req.body || {};
+    const { message, model, imageBase64 } = req.body || {};
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Message is required.' });
     }
+    // Optional camera snapshot (base64 JPEG) for vision — e.g. "Show Pari" from owner home.
+    const visionImage: string | null =
+      typeof imageBase64 === 'string' && imageBase64.length > 100 ? imageBase64 : null;
 
     const userId = req.hoorviaUser!.id;
     const policy = getPlatformPolicy();
@@ -864,7 +867,11 @@ Use ONLY the titles and URLs the tool returned — never invent, shorten, or "fi
     // Pari AI: history comes from the SERVER-persisted thread (memory fix),
     // not from whatever the client claims.
     const serverHistory = getPariThreadHistoryForModel(userId, 20);
-    const contents = [...serverHistory, { role: 'user', parts: [{ text: message }] }];
+    const userParts: any[] = [{ text: message }];
+    if (visionImage) {
+      userParts.push({ inlineData: { mimeType: 'image/jpeg', data: visionImage } });
+    }
+    const contents = [...serverHistory, { role: 'user', parts: userParts }];
 
     // Persist the user turn immediately so context survives retries.
     appendPariThreadMessage(userId, 'user', message);
