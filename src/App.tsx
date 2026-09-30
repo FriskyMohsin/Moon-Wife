@@ -55,7 +55,7 @@ import { isGuestActivationRequested, isGuestDeactivationRequested } from './lib/
 import { HoorviaLanding } from './components/HoorviaLanding';
 import { HoorviaDashboard } from './components/HoorviaDashboard';
 import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
-import { PariOwnerDashboard } from './components/PariOwnerDashboard';
+import { PariOwnerHome } from './components/PariOwnerHome';
 import { DesktopShell } from './components/desktop/DesktopShell';
 import {
   getOwnerToken,
@@ -1589,11 +1589,23 @@ export default function App() {
   // Render warm Owner Dashboard (AI-Wife style) if explicitly opened (only if verified)
   if (showOwnerAdmin && isVerifiedOwner) {
     return (
-      <PariOwnerDashboard
+      <PariOwnerHome
         token={hoorviaToken!}
-        ownerName="Mohsin"
-        onClose={() => setShowOwnerAdmin(false)}
-        onOpenFullAdmin={() => setShowFullAdmin(true)}
+        user={hoorviaUser}
+        initialCompanion={
+          hoorviaCompanion || {
+            name: 'Pari AI',
+            type: 'pari_assistant',
+            gender: 'female',
+            voice: 'Aoede',
+            language: 'English',
+            personality: 'Pari AI — your personal AI companion. Warm, helpful, and proactive.',
+            systemPrompt: 'You are Pari AI, a warm and helpful personal AI companion.',
+            tone: 'Friendly',
+          }
+        }
+        onLogout={handleHoorviaLogout}
+        onOpenOwnerAdmin={() => setShowFullAdmin(true)}
       />
     );
   }
