@@ -49,7 +49,6 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
   onOwnerAuthenticated,
   onContinueAsGuestOwner,
 }) => {
-  const [step, setStep] = useState<number>(1);
   const [authMode, setAuthMode] = useState<'register' | 'login'>('register');
 
   // Owner Portal Authentication State
@@ -212,39 +211,6 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
     }
   };
 
-  const PARI_FEATURES = [
-    {
-      icon: Mic,
-      title: 'Voice-first — just call and talk',
-      text: 'Tap one button and talk to Pari AI like Alexa. She listens, replies out loud, and gets things done.',
-    },
-    {
-      icon: MessageSquare,
-      title: 'Chat that remembers',
-      text: 'Text or speak in your own language — Roman Urdu, English, or 24 more. Pari AI remembers what matters to you.',
-    },
-    {
-      icon: Bell,
-      title: 'Tasks & reminders that fire',
-      text: 'Say "remind me at 7" and it is done. Tasks persist, reminders arrive as push notifications — even when the app is closed.',
-    },
-    {
-      icon: Brain,
-      title: 'A memory that works for you',
-      text: 'Pari AI auto-remembers facts in any language. View, edit, or delete them anytime from your Memory tab.',
-    },
-    {
-      icon: FileText,
-      title: 'Real files, on demand',
-      text: 'Ask for a presentation, Word doc, spreadsheet, PDF, or EPUB manuscript — download the actual file in seconds.',
-    },
-    {
-      icon: Sparkles,
-      title: 'Content studio',
-      text: 'Give a topic, pick a platform — get a ready post image, caption, and hashtags for your social media.',
-    },
-  ];
-
   return (
     <div className="min-h-screen bg-[#0A070B] text-slate-100 flex flex-col justify-between selection:bg-rose-500/30 font-sans">
       {/* Background Glow Overlay */}
@@ -260,20 +226,14 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
         <div className="flex items-center gap-4">
           {authMode === 'register' ? (
             <button
-              onClick={() => {
-                setAuthMode('login');
-                setStep(3);
-              }}
+              onClick={() => setAuthMode('login')}
               className="text-sm text-rose-300 hover:text-rose-100 transition-colors"
             >
               Already have an account? <span className="underline font-semibold">Sign In</span>
             </button>
           ) : (
             <button
-              onClick={() => {
-                setAuthMode('register');
-                setStep(1);
-              }}
+              onClick={() => setAuthMode('register')}
               className="text-sm text-rose-300 hover:text-rose-100 transition-colors"
             >
               Need an account? <span className="underline font-semibold">Get Started</span>
@@ -304,334 +264,115 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="relative z-10 max-w-5xl w-full mx-auto px-6 py-10 flex-1 flex flex-col justify-center">
-        {/* Step Indicator */}
-        <div className="mb-8 flex items-center justify-center gap-2 text-xs font-medium text-rose-300/70">
-          <span className={`px-3 py-1 rounded-full border ${step === 1 ? 'bg-rose-950 text-rose-300 border-rose-500/50' : 'bg-slate-900/60 border-slate-800'}`}>
-            1. Meet Pari AI
-          </span>
-          <ArrowRight className="w-3 h-3 text-slate-600" />
-          <span className={`px-3 py-1 rounded-full border ${step === 2 ? 'bg-rose-950 text-rose-300 border-rose-500/50' : 'bg-slate-900/60 border-slate-800'}`}>
-            2. Customize
-          </span>
-          <ArrowRight className="w-3 h-3 text-slate-600" />
-          <span className={`px-3 py-1 rounded-full border ${step === 3 ? 'bg-rose-950 text-rose-300 border-rose-500/50' : 'bg-slate-900/60 border-slate-800'}`}>
-            3. Account & AI Key
-          </span>
+      {/* Main Content — simple single page */}
+      <main className="relative z-10 max-w-md w-full mx-auto px-6 py-10 flex-1 flex flex-col justify-center">
+        <div className="text-center space-y-3 mb-8">
+          <h2 className="text-4xl font-extrabold tracking-tight text-white">
+            Pari <span className="text-rose-400">AI</span>
+          </h2>
+          <p className="text-slate-400 text-sm leading-relaxed">
+            Your personal AI companion — call and talk, chat, set reminders. She remembers what matters.
+          </p>
         </div>
 
-        {/* STEP 1: MEET PARI AI */}
-        {step === 1 && (
-          <div className="space-y-8 animate-fadeIn">
-            <div className="text-center space-y-4">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-rose-950/60 border border-rose-800/40 text-xs font-semibold text-rose-300">
-                <Mic className="w-3.5 h-3.5" />
-                Voice-first personal AI companion
-              </div>
-              <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white">
-                Meet <span className="text-rose-400">Pari AI</span>
-              </h2>
-              <p className="text-slate-400 max-w-2xl mx-auto text-sm md:text-base leading-relaxed">
-                Your personal AI companion that you simply <strong className="text-slate-200">call and talk to</strong> — like Alexa, but yours.
-                Chat by text or voice, set tasks and reminders, and let her remember what matters to you.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {PARI_FEATURES.map((f) => {
-                const Icon = f.icon;
-                return (
-                  <div
-                    key={f.title}
-                    className="p-5 rounded-2xl bg-slate-900/40 border border-slate-800/80 hover:border-rose-900/60 transition-colors"
-                  >
-                    <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/40 text-rose-300 w-fit mb-3">
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <h3 className="text-sm font-bold text-white">{f.title}</h3>
-                    <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">{f.text}</p>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-rose-950/40 to-slate-900 border border-rose-900/40 flex flex-col md:flex-row items-center justify-between gap-4">
-              <p className="text-xs text-slate-300 leading-relaxed">
-                <strong className="text-white">One companion, no confusing catalog.</strong> Pari AI adapts to whatever you need —
-                a chat partner, a reminder keeper, a study helper, a content maker. Just tell her.
-              </p>
-              <button
-                onClick={() => setStep(2)}
-                className="px-6 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-medium text-sm transition-all shadow-lg shadow-rose-950/50 flex items-center gap-2 shrink-0"
-              >
-                Continue: Customize <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
+        <form
+          onSubmit={handleSubmitAuth}
+          className="space-y-4 bg-slate-900/60 p-6 rounded-3xl border border-slate-800"
+        >
+          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+            <button
+              type="button"
+              onClick={() => setAuthMode('register')}
+              className={`flex-1 px-3 py-1.5 rounded-lg font-medium transition-all ${
+                authMode === 'register' ? 'bg-rose-950 text-rose-300' : 'text-slate-400'
+              }`}
+            >
+              Register
+            </button>
+            <button
+              type="button"
+              onClick={() => setAuthMode('login')}
+              className={`flex-1 px-3 py-1.5 rounded-lg font-medium transition-all ${
+                authMode === 'login' ? 'bg-rose-950 text-rose-300' : 'text-slate-400'
+              }`}
+            >
+              Sign In
+            </button>
           </div>
-        )}
 
-        {/* STEP 2: CUSTOMIZE PARI AI */}
-        {step === 2 && (
-          <div className="space-y-6 max-w-2xl mx-auto w-full animate-fadeIn bg-slate-900/50 p-6 md:p-8 rounded-3xl border border-rose-950/60 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
-              <div>
-                <h3 className="text-2xl font-bold text-white">Customize Pari AI</h3>
-                <p className="text-xs text-slate-400">Pick her voice and your language. Everything else just works.</p>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Companion Name</label>
-              <input
-                type="text"
-                value="Pari AI"
-                readOnly
-                disabled
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-sm cursor-not-allowed opacity-80"
-              />
-              <p className="text-[11px] text-slate-500 mt-1">Fixed for now — renamable later.</p>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                  <Volume2 className="w-3.5 h-3.5 text-rose-400" /> Select Voice
-                </label>
-                <span className="text-[10px] text-slate-400">Preview any voice before selection</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {HOORVIA_VOICES.map((v) => {
-                  const isSelected = voice === v.id;
-                  const isPlaying = previewingVoice === v.id;
-                  return (
-                    <div
-                      key={v.id}
-                      onClick={() => setVoice(v.id)}
-                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                        isSelected
-                          ? 'bg-rose-950/40 border-rose-500 text-white shadow-sm ring-1 ring-rose-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-xs font-semibold text-white">{v.name}</span>
-                          <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                              v.gender === 'female'
-                                ? 'bg-pink-950/60 text-pink-300 border border-pink-800/40'
-                                : v.gender === 'male'
-                                ? 'bg-blue-950/60 text-blue-300 border border-blue-800/40'
-                                : 'bg-purple-950/60 text-purple-300 border border-purple-800/40'
-                            }`}
-                          >
-                            {v.tag}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5 truncate">{v.desc}</p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={(e) => handleToggleVoicePreview(v.id, e)}
-                        title={`Preview ${v.name} voice`}
-                        className={`p-1.5 px-2 rounded-lg border text-xs font-medium transition-all flex items-center gap-1 shrink-0 ${
-                          isPlaying
-                            ? 'bg-rose-500 text-white border-rose-400 animate-pulse'
-                            : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700'
-                        }`}
-                      >
-                        {isPlaying ? (
-                          <>
-                            <Square className="w-3 h-3 fill-current text-white" />
-                            <span className="text-[10px]">Stop</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-3 h-3 fill-current text-rose-300" />
-                            <span className="text-[10px]">Preview</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1">
-                <Globe className="w-3.5 h-3.5 text-rose-400" /> Primary Language
-              </label>
-              <SearchableLanguagePicker
-                selectedLanguage={language}
-                onSelectLanguage={setLanguage}
-                autoMatchLanguage={autoMatchLanguage}
-                onToggleAutoMatch={setAutoMatchLanguage}
-              />
-            </div>
-
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-              <button
-                onClick={() => setStep(1)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 flex items-center gap-1.5"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" /> Back
-              </button>
-
-              <button
-                onClick={() => setStep(3)}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white text-xs font-medium flex items-center gap-2"
-              >
-                Next: Account & AI Key <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 3: ACCOUNT CREATION & BYOK AI KEY */}
-        {step === 3 && (
-          <form
-            onSubmit={handleSubmitAuth}
-            className="space-y-6 max-w-xl mx-auto w-full animate-fadeIn bg-slate-900/60 p-6 md:p-8 rounded-3xl border border-rose-950/60 shadow-xl"
-          >
-            <div className="border-b border-slate-800/80 pb-4 flex items-center justify-between">
-              <div>
-                <h3 className="text-2xl font-bold text-white">
-                  {authMode === 'register' ? 'Create Your Account' : 'Sign In To Your Account'}
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Your memories and Pari AI data remain 100% private and isolated.
-                </p>
-              </div>
-              <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('register')}
-                  className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                    authMode === 'register' ? 'bg-rose-950 text-rose-300 border border-rose-800/40' : 'text-slate-400'
-                  }`}
-                >
-                  Register
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('login')}
-                  className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                    authMode === 'login' ? 'bg-rose-950 text-rose-300 border border-rose-800/40' : 'text-slate-400'
-                  }`}
-                >
-                  Sign In
-                </button>
-              </div>
-            </div>
-
-            {errorMessage && (
-              <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800/80 text-xs text-rose-300">
-                {errorMessage}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {authMode === 'register' && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Your Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Enter your name"
-                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="your.email@example.com"
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-none focus:border-rose-500"
-                />
-              </div>
-            </div>
-
-            {/* BYOK GEMINI SECTION */}
-            <div className="p-4 rounded-2xl bg-slate-950 border border-rose-950/60 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
-                  <Key className="w-4 h-4 text-rose-400" /> Connect Your AI Provider
-                </span>
-                <span className="text-[10px] text-rose-400 uppercase font-mono font-bold">Required</span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Your own API key is required to activate Pari AI. Connect your Google Gemini API key — it is encrypted
-                at rest and never exposed to other users or logged.
-              </p>
+          {authMode === 'register' && (
+            <input
+              type="text"
+              placeholder="Your name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
+          />
+          {authMode === 'register' && (
+            <>
               <input
                 type="password"
-                required={authMode === 'register'}
+                placeholder="Your Gemini API key"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="AIzaSy... (Paste Google Gemini API Key)"
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-rose-500"
+                required
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
               />
-              {GEMINI_KEY_TUTORIAL_VIDEO_URL ? (
-                <a
-                  href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-[11px] text-rose-300 hover:text-rose-200 font-medium"
+              <div className="grid grid-cols-2 gap-3">
+                <select
+                  value={voice}
+                  onChange={(e) => setVoice(e.target.value as CompanionVoice)}
+                  className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs outline-none"
                 >
-                  <Play className="w-3 h-3 fill-current" />
-                  How to get your Gemini API key? Watch the tutorial
-                </a>
-              ) : null}
-            </div>
+                  {HOORVIA_VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs outline-none"
+                >
+                  <option>English</option>
+                  <option>Roman Urdu</option>
+                  <option>Urdu</option>
+                </select>
+              </div>
+            </>
+          )}
 
-            <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 flex items-center gap-1.5"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" /> Back
-              </button>
+          {errorMessage && (
+            <p className="text-xs text-rose-400 bg-rose-950/40 border border-rose-900/40 rounded-xl px-3 py-2">
+              {errorMessage}
+            </p>
+          )}
 
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="px-8 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white text-xs font-bold shadow-lg shadow-rose-950/60 flex items-center gap-2 disabled:opacity-50"
-              >
-                {isSubmitting ? (
-                  'Launching Pari AI...'
-                ) : (
-                  <>
-                    <UserCheck className="w-4 h-4" />
-                    {authMode === 'register' ? 'Create Account & Launch' : 'Sign In & Connect'}
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-        )}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-medium text-sm transition-all disabled:opacity-60"
+          >
+            {isSubmitting ? 'Please wait…' : authMode === 'register' ? 'Start with Pari AI' : 'Sign In'}
+          </button>
+        </form>
+
       </main>
 
       {/* Footer */}
