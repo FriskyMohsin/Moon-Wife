@@ -15,6 +15,10 @@ import fs from 'fs';
 import { resolveDataPath } from './runtimePaths';
 import {
   browserOpen,
+  browserOpenTab,
+  browserListTabs,
+  browserSwitchTab,
+  browserCloseTab,
   browserSnapshot,
   browserClick,
   browserType,
@@ -27,6 +31,10 @@ import {
 
 export const BROWSER_TOOL_NAMES = [
   'browser_open',
+  'browser_open_tab',
+  'browser_list_tabs',
+  'browser_switch_tab',
+  'browser_close_tab',
   'browser_snapshot',
   'browser_click',
   'browser_type',
@@ -45,6 +53,37 @@ export const BROWSER_TOOL_DECLARATIONS: any[] = [
       type: 'OBJECT',
       properties: { url: { type: 'STRING', description: 'The full URL to open (https://...).' } },
       required: ['url'],
+    },
+  },
+  {
+    name: 'browser_open_tab',
+    description: 'Open a URL in a NEW browser tab and switch to it. Use this when the user asks to open something without losing the current page.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { url: { type: 'STRING', description: 'The full URL to open in a new tab (https://...).' } },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'browser_list_tabs',
+    description: 'List all open browser tabs with their index, URL, and title.',
+    parameters: { type: 'OBJECT', properties: {} },
+  },
+  {
+    name: 'browser_switch_tab',
+    description: 'Switch to a browser tab by its index (0-based, from browser_list_tabs).',
+    parameters: {
+      type: 'OBJECT',
+      properties: { index: { type: 'NUMBER', description: 'Tab index (0-based).' } },
+      required: ['index'],
+    },
+  },
+  {
+    name: 'browser_close_tab',
+    description: 'Close a browser tab by index. If no index given, closes the current tab. Cannot close the last tab.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { index: { type: 'NUMBER', description: 'Tab index (0-based). Optional.' } },
     },
   },
   {
@@ -122,10 +161,18 @@ export interface BrowserEngine {
   browserYoutube(userId: string, action: YoutubeAction): Promise<any>;
   browserScreenshot(userId: string): Promise<Buffer>;
   closeBrowserSession(userId: string): Promise<any>;
+  browserOpenTab(userId: string, url: string): Promise<any>;
+  browserListTabs(userId: string): Promise<any>;
+  browserSwitchTab(userId: string, index: number): Promise<any>;
+  browserCloseTab(userId: string, index?: number): Promise<any>;
 }
 
 const realEngine: BrowserEngine = {
   browserOpen,
+  browserOpenTab,
+  browserListTabs,
+  browserSwitchTab,
+  browserCloseTab,
   browserSnapshot,
   browserClick,
   browserType,
@@ -177,9 +224,9 @@ export async function executeBrowserTool(
       }
       case 'browser_youtube': {
         const action = String(args?.action || '');
-        const valid = ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'] as const;
+        const valid = ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop', 'volume_up', 'volume_down', 'mute'] as const;
         if (!(valid as readonly string[]).includes(action)) {
-          return { ok: false, message: 'Invalid YouTube action. Use play, pause, seek_forward_10, seek_back_10, or stop.' };
+          return { ok: false, message: 'Invalid YouTube action. Use play, pause, seek_forward_10, seek_back_10, stop, volume_up, volume_down, or mute.' };
         }
         const r = await engine.browserYoutube(userId, action as YoutubeAction);
         return { ok: r.ok, message: r.message };
@@ -189,6 +236,26 @@ export async function executeBrowserTool(
         const relFile = ['browser-shots', safeUserDirPart(userId), `shot-${Date.now()}.png`].join('/');
         fs.writeFileSync(resolveDataPath('hoorvia_platform', ...relFile.split('/')), png);
         return { ok: true, message: 'Screenshot saved', file: relFile };
+      }
+      case 'browser_open_tab': {
+        const url = String(args?.url || '');
+        if (!url) return { ok: false, message: 'url is required.' };
+        const r = await engine.browserOpenTab(userId, url);
+        return { ok: r.ok, message: r.message, url: (r as any).url || undefined, title: (r as any).title || undefined };
+      }
+      case 'browser_list_tabs': {
+        const r = await engine.browserListTabs(userId);
+        return { ok: r.ok, message: r.message, tabs: (r as any).tabs };
+      }
+      case 'browser_switch_tab': {
+        const index = Number(args?.index ?? 0);
+        const r = await engine.browserSwitchTab(userId, index);
+        return { ok: r.ok, message: r.message, url: (r as any).url || undefined, title: (r as any).title || undefined };
+      }
+      case 'browser_close_tab': {
+        const idxRaw = args?.index;
+        const r = await engine.browserCloseTab(userId, idxRaw !== undefined ? Number(idxRaw) : undefined);
+        return { ok: r.ok, message: r.message };
       }
       case 'browser_close': {
         const r = await engine.closeBrowserSession(userId);

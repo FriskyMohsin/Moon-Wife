@@ -136,7 +136,9 @@ export function youtubeActionToKeys(action: YoutubeAction): string[] {
 
 interface BrowserSession {
   context: BrowserContext;
-  page: Page;
+  page: Page; // active tab (backward compat)
+  pages: Page[]; // all open tabs
+  activePageIndex: number;
   lastUsedAt: number;
 }
 
@@ -216,10 +218,12 @@ async function sweepIdleSessions(): Promise<void> {
 
 async function closeSessionInternal(userId: string, session: BrowserSession): Promise<void> {
   sessions.delete(userId);
-  try {
-    await session.page.close();
-  } catch {
-    // ignore
+  for (const pg of session.pages || []) {
+    try {
+      if (!pg.isClosed()) await pg.close();
+    } catch {
+      // ignore
+    }
   }
   try {
     await session.context.close();
@@ -231,9 +235,17 @@ async function closeSessionInternal(userId: string, session: BrowserSession): Pr
 /** Check if a session's page/context/browser is still alive. */
 function isSessionAlive(session: BrowserSession): boolean {
   try {
-    if (session.page.isClosed()) return false;
     const browser = session.context.browser();
     if (!browser || !browser.isConnected()) return false;
+    // At least one tab must be open.
+    const alive = (session.pages || []).filter((pg) => {
+      try { return !pg.isClosed(); } catch { return false; }
+    });
+    if (alive.length === 0) return false;
+    // Point the active page at a live tab.
+    session.pages = alive;
+    if (session.activePageIndex >= alive.length) session.activePageIndex = alive.length - 1;
+    session.page = alive[session.activePageIndex];
     return true;
   } catch {
     return false;
@@ -281,7 +293,7 @@ async function resolveSession(userId: string): Promise<BrowserSession> {
     locale: 'en-US',
   });
   const page = await context.newPage();
-  session = { context, page, lastUsedAt: Date.now() };
+  session = { context, page, pages: [page], activePageIndex: 0, lastUsedAt: Date.now() };
   sessions.set(userId, session);
   startSweepTimer();
   auditAction(userId, AUDIT_ACTION, 'session created');
@@ -413,6 +425,104 @@ export async function browserOpen(userId: string, url: string): Promise<BrowserA
     const { url: finalUrl, title } = await currentUrlAndTitle(page);
     return { ok: true, message: `Opened ${finalUrl}`, url: finalUrl, title: title || undefined };
   });
+}
+
+/** Open a URL in a NEW tab and switch to it. */
+export async function browserOpenTab(userId: string, url: string): Promise<BrowserActionResult> {
+  const check = isBrowserUrlAllowed(url);
+  if (!check.allowed) {
+    const message = `Blocked: ${check.reason ?? 'URL not allowed.'}`;
+    auditAction(userId, AUDIT_ACTION, `open-tab refused: ${url} — ${message}`);
+    return { ok: false, message };
+  }
+  try {
+    const session = await resolveSession(userId);
+    const newPage = await session.context.newPage();
+    await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await dismissConsentDialogs(newPage);
+    session.pages.push(newPage);
+    session.activePageIndex = session.pages.length - 1;
+    session.page = newPage;
+    session.lastUsedAt = Date.now();
+    const { url: finalUrl, title } = await currentUrlAndTitle(newPage);
+    auditAction(userId, AUDIT_ACTION, `open-tab: ok — ${finalUrl} (tab ${session.activePageIndex + 1}/${session.pages.length})`);
+    return { ok: true, message: `Opened ${finalUrl} in new tab (${session.activePageIndex + 1}/${session.pages.length}).`, url: finalUrl, title: title || undefined };
+  } catch (err) {
+    const message = `Browser open-tab failed: ${describeError(err)}`;
+    auditAction(userId, AUDIT_ACTION, message);
+    return { ok: false, message };
+  }
+}
+
+/** List all open tabs for this user. */
+export async function browserListTabs(userId: string): Promise<BrowserActionResult & { tabs?: Array<{ index: number; url: string; title: string; active: boolean }> }> {
+  try {
+    const session = await resolveSession(userId);
+    const tabs: Array<{ index: number; url: string; title: string; active: boolean }> = [];
+    for (let i = 0; i < session.pages.length; i++) {
+      const pg = session.pages[i];
+      let url = '', title = '';
+      try {
+        if (!pg.isClosed()) {
+          url = pg.url();
+          title = await pg.title().catch(() => '');
+        }
+      } catch { /* skip dead tab */ }
+      tabs.push({ index: i, url, title, active: i === session.activePageIndex });
+    }
+    return { ok: true, message: `${tabs.length} tab(s) open.`, tabs };
+  } catch (err) {
+    return { ok: false, message: `Could not list tabs: ${describeError(err)}` };
+  }
+}
+
+/** Switch to a tab by index (0-based). */
+export async function browserSwitchTab(userId: string, index: number): Promise<BrowserActionResult> {
+  try {
+    const session = await resolveSession(userId);
+    if (index < 0 || index >= session.pages.length) {
+      return { ok: false, message: `Invalid tab index ${index} — ${session.pages.length} tab(s) open (0-${session.pages.length - 1}).` };
+    }
+    const pg = session.pages[index];
+    try {
+      if (pg.isClosed()) return { ok: false, message: `Tab ${index} is closed.` };
+    } catch {
+      return { ok: false, message: `Tab ${index} is not accessible.` };
+    }
+    session.activePageIndex = index;
+    session.page = pg;
+    session.lastUsedAt = Date.now();
+    try { await pg.bringToFront(); } catch { /* headless — ignore */ }
+    const { url, title } = await currentUrlAndTitle(pg);
+    auditAction(userId, AUDIT_ACTION, `switch-tab: ok — tab ${index + 1}/${session.pages.length} ${url}`);
+    return { ok: true, message: `Switched to tab ${index + 1}/${session.pages.length}: ${title || url}`, url, title: title || undefined };
+  } catch (err) {
+    return { ok: false, message: `Could not switch tab: ${describeError(err)}` };
+  }
+}
+
+/** Close a tab by index (0-based). Closes the active tab if no index given. */
+export async function browserCloseTab(userId: string, index?: number): Promise<BrowserActionResult> {
+  try {
+    const session = await resolveSession(userId);
+    const idx = index ?? session.activePageIndex;
+    if (session.pages.length <= 1) {
+      return { ok: false, message: 'Cannot close the last tab — use browser_close to end the session.' };
+    }
+    if (idx < 0 || idx >= session.pages.length) {
+      return { ok: false, message: `Invalid tab index ${idx}.` };
+    }
+    const pg = session.pages[idx];
+    try { if (!pg.isClosed()) await pg.close(); } catch { /* ignore */ }
+    session.pages.splice(idx, 1);
+    if (session.activePageIndex >= session.pages.length) session.activePageIndex = session.pages.length - 1;
+    session.page = session.pages[session.activePageIndex];
+    session.lastUsedAt = Date.now();
+    const { url, title } = await currentUrlAndTitle(session.page);
+    return { ok: true, message: `Closed tab. Now on tab ${session.activePageIndex + 1}/${session.pages.length}: ${title || url}`, url, title: title || undefined };
+  } catch (err) {
+    return { ok: false, message: `Could not close tab: ${describeError(err)}` };
+  }
 }
 
 export async function browserSnapshot(userId: string): Promise<BrowserActionResult & { snapshot: string }> {
