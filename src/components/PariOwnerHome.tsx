@@ -381,6 +381,9 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
                       : 'Call band karo'
               : 'Talk to Maryam'}
           </span>
+          {liveError && !isLive && (
+            <span className="text-[10px] text-red-300 max-w-[120px] text-center">{liveError}</span>
+          )}
         </div>
 
         <div className="flex flex-col items-center gap-1.5">
