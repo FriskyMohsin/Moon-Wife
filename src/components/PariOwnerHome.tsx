@@ -367,6 +367,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
           </div>
           <div className="flex-1 overflow-hidden">
             <HoorviaDashboard
+token=<redacted>
               user={user}
               initialCompanion={initialCompanion}
               onLogout={onLogout}
