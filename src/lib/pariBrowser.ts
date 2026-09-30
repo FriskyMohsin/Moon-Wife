@@ -222,12 +222,32 @@ async function closeSessionInternal(userId: string, session: BrowserSession): Pr
   }
 }
 
+/** Check if a session's page/context/browser is still alive. */
+function isSessionAlive(session: BrowserSession): boolean {
+  try {
+    if (session.page.isClosed()) return false;
+    const browser = session.context.browser();
+    if (!browser || !browser.isConnected()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Ensure a live session for this userId; evicts most-idle session when full. */
 async function resolveSession(userId: string): Promise<BrowserSession> {
   let session = sessions.get(userId);
   if (session) {
-    session.lastUsedAt = Date.now();
-    return session;
+    // The user may have closed the visible browser window, or the browser
+    // may have crashed — detect the dead session and start fresh.
+    if (!isSessionAlive(session)) {
+      await closeSessionInternal(userId, session);
+      auditAction(userId, AUDIT_ACTION, 'session was dead (window closed/crashed) — starting fresh');
+      session = undefined;
+    } else {
+      session.lastUsedAt = Date.now();
+      return session;
+    }
   }
   if (sessions.size >= MAX_BROWSER_CONTEXTS) {
     // Make room: close the most-idle session.
