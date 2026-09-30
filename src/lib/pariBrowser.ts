@@ -348,6 +348,28 @@ async function currentUrlAndTitle(page: Page): Promise<{ url: string; title: str
 // Actions
 // ---------------------------------------------------------------------------
 
+/** Dismiss common cookie/consent dialogs (YouTube, Google, etc.) that block the page.
+ * Runs after navigation so video players and content load properly. */
+async function dismissConsentDialogs(page: any): Promise<void> {
+  const selectors = [
+    'button:has-text("Reject all")',
+    'button:has-text("Reject All")',
+    '#dismiss-button',
+    'button[aria-label*="Reject"]',
+    'button[aria-label*="reject"]',
+  ];
+  for (const sel of selectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 1500 })) {
+        await btn.click({ timeout: 3000 });
+        await page.waitForTimeout(1000);
+        return;
+      }
+    } catch (_) { /* try next selector */ }
+  }
+}
+
 export async function browserOpen(userId: string, url: string): Promise<BrowserActionResult> {
   const check = isBrowserUrlAllowed(url);
   if (!check.allowed) {
@@ -357,6 +379,7 @@ export async function browserOpen(userId: string, url: string): Promise<BrowserA
   }
   return withPage(userId, 'open', async (page) => {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await dismissConsentDialogs(page);
     const { url: finalUrl, title } = await currentUrlAndTitle(page);
     return { ok: true, message: `Opened ${finalUrl}`, url: finalUrl, title: title || undefined };
   });
