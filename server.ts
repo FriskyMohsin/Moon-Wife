@@ -16,6 +16,7 @@ export {
   getEncryptedCredential,
 } from './src/lib/hoorviaPlatform';
 import { getUserGeminiApiKey as getOwnerGeminiApiKey } from './src/lib/hoorviaPlatform';
+import { resolveModelKeyForUser } from './src/lib/pariRouter';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -5426,6 +5427,15 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
         if (ownerKey) {
           ownerByokKey = ownerKey;
           console.log(`[${connectionId}] [OWNER_BYOK_FALLBACK] Using owner's saved Gemini key for Live Voice`);
+        } else {
+          // Per-model keys (Settings → Provider saves here)
+          const resolved = resolveModelKeyForUser('usr_mohsin_owner');
+          if (resolved?.apiKey) {
+            ownerByokKey = resolved.apiKey;
+            console.log(`[${connectionId}] [OWNER_BYOK_FALLBACK] Using owner's per-model key (source=${resolved.source}) for Live Voice`);
+          } else {
+            console.warn(`[${connectionId}] [OWNER_BYOK_FALLBACK] No owner key found in any store`);
+          }
         }
       } catch (e: any) {
         console.warn(`[${connectionId}] [OWNER_BYOK_FALLBACK_FAILED]`, e?.message || e);
