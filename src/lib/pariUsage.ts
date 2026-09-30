@@ -6,20 +6,20 @@
  * client UI can show a usage meter. The platform owner is exempt.
  *
  * Defaults (policy-overridable later via PARI_USAGE_LIMITS):
- *   chat:        100/day, 500/week
- *   image:       10/day,   50/week
- *   file:        10/day,   50/week
- *   live voice:  30 min/day, 180 min/week
+ *   chat:        500/day, 2000/week
+ *   image:       50/day,   200/week
+ *   file:        50/day,   200/week
+ *   live voice:  180 min/day, 720 min/week
  */
 import { Response } from 'express';
 import { getUserById } from './hoorviaPlatform';
 import { pariLoad, pariSave } from './pariStore';
 
 export const PARI_USAGE_LIMITS = {
-  chat: { perDay: 100, perWeek: 500 },
-  image: { perDay: 10, perWeek: 50 },
-  file: { perDay: 10, perWeek: 50 },
-  liveVoiceMinutes: { perDay: 30, perWeek: 180 },
+  chat: { perDay: 500, perWeek: 2000 },
+  image: { perDay: 50, perWeek: 200 },
+  file: { perDay: 50, perWeek: 200 },
+  liveVoiceMinutes: { perDay: 180, perWeek: 720 },
 } as const;
 
 export type PariUsageKind = 'chat' | 'image' | 'file' | 'liveVoice';
