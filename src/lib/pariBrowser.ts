@@ -147,7 +147,11 @@ async function getBrowser(): Promise<Browser> {
     // Headless by default (production servers have no display). Set
     // PARI_BROWSER_HEADLESS=false to SEE the browser window (local dev/demo).
     headless: process.env.PARI_BROWSER_HEADLESS !== 'false',
-    args: ['--no-sandbox'],
+    args: [
+      '--no-sandbox',
+      // Reduce automation detection (YouTube blocks headless/bot browsers).
+      '--disable-blink-features=AutomationControlled',
+    ],
   };
   const exe = process.env.PARI_CHROMIUM_EXECUTABLE?.trim();
   if (exe) launchOptions.executablePath = exe;
