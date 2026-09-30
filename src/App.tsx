@@ -1618,8 +1618,7 @@ export default function App() {
           onLoginSuccess={handleHoorviaLoginSuccess}
           onOwnerAuthenticated={(data) => {
             handleHoorviaLoginSuccess(data);
-            setPlatformMode('mohsin_maryam');
-            localStorage.setItem('hoorvia_platform_mode', 'mohsin_maryam');
+            setShowOwnerAdmin(true);
           }}
         />
       );
