@@ -87,13 +87,13 @@ export const BROWSER_TOOL_DECLARATIONS: any[] = [
   {
     name: 'browser_youtube',
     description:
-      'Control YouTube playback: play, pause, seek_forward_10, seek_back_10, stop. Page must already be a YouTube watch page.',
+      'Control YouTube playback: play, pause, seek_forward_10, seek_back_10, stop, volume_up, volume_down, mute. Page must already be a YouTube watch page.',
     parameters: {
       type: 'OBJECT',
       properties: {
         action: {
           type: 'STRING',
-          enum: ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop'],
+          enum: ['play', 'pause', 'seek_forward_10', 'seek_back_10', 'stop', 'volume_up', 'volume_down', 'mute'],
           description: 'The playback action.',
         },
       },

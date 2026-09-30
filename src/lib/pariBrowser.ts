@@ -109,7 +109,7 @@ export function isBrowserUrlAllowed(url: string): { allowed: boolean; reason?: s
 // YouTube key map
 // ---------------------------------------------------------------------------
 
-export type YoutubeAction = 'play' | 'pause' | 'seek_forward_10' | 'seek_back_10' | 'stop';
+export type YoutubeAction = 'play' | 'pause' | 'seek_forward_10' | 'seek_back_10' | 'stop' | 'volume_up' | 'volume_down' | 'mute';
 
 export function youtubeActionToKeys(action: YoutubeAction): string[] {
   switch (action) {
@@ -121,6 +121,12 @@ export function youtubeActionToKeys(action: YoutubeAction): string[] {
       return ['l'];
     case 'seek_back_10':
       return ['j'];
+    case 'volume_up':
+      return ['ArrowUp'];
+    case 'volume_down':
+      return ['ArrowDown'];
+    case 'mute':
+      return ['m'];
   }
 }
 
@@ -444,9 +450,23 @@ export async function browserClick(userId: string, ref: string): Promise<Browser
   return withPage(userId, 'click', async (page) => {
     // ref is a [ref=eN] token from browserSnapshot.
     const clean = cleanRef(ref);
+    const urlBefore = page.url();
     await page.locator(`aria-ref=${clean}`).first().click({ timeout: 10000 });
+    // Links often navigate — wait briefly for the URL to change or the page to settle.
+    try {
+      await page.waitForFunction(
+        (before: string) => window.location.href !== before,
+        urlBefore,
+        { timeout: 5000 }
+      );
+      // Give the new page a moment to start loading.
+      await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+    } catch {
+      // No navigation happened (same-page action) — that's fine.
+    }
     const { url, title } = await currentUrlAndTitle(page);
-    return { ok: true, message: `Clicked ${clean}.`, url, title: title || undefined };
+    const navigated = url !== urlBefore;
+    return { ok: true, message: `Clicked ${clean}.${navigated ? ` Navigated to ${url}` : ''}`, url, title: title || undefined };
   });
 }
 
