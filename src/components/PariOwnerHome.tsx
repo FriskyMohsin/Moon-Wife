@@ -204,7 +204,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
           loop
           muted
           playsInline
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover object-top"
         />
         {/* Fallback static image if video fails */}
         <img
@@ -321,7 +321,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
           >
             <Phone size={30} />
           </button>
-          <span className="text-[10px] text-white font-semibold">Talk to Pari</span>
+          <span className="text-[10px] text-white font-semibold">Talk to Maryam</span>
         </div>
 
         <div className="flex flex-col items-center gap-1.5">

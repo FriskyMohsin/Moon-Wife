@@ -318,6 +318,8 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const durationTimerRef = useRef<any>(null);
 
   const hasBYOK = keys.length > 0 || user.role === 'owner';
+  const isOwnerView = user.role === 'owner' && user.id === 'usr_mohsin_owner';
+  const aiName = isOwnerView ? 'Maryam' : 'Pari';
 
   const handleToggleVoicePreview = (vId: CompanionVoice, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1557,7 +1559,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           const pendingTasks = tasks.filter((t) => t.status !== 'done');
           const quickActions: { id: string; label: string; desc: string; icon: any; tab: TabId }[] = [
             { id: 'qa-chat', label: 'Chat with Pari', desc: 'Ask anything, anytime', icon: MessageSquare, tab: 'chat' },
-            { id: 'qa-voice', label: 'Voice Call', desc: 'Talk to Pari live', icon: Phone, tab: 'voice' },
+            { id: 'qa-voice', label: 'Voice Call', desc: `Talk to ${aiName} live`, icon: Phone, tab: 'voice' },
             { id: 'qa-tasks', label: 'New Task', desc: 'Plan your day', icon: ListTodo, tab: 'tasks' },
             { id: 'qa-reminders', label: 'New Reminder', desc: 'Never miss a thing', icon: Bell, tab: 'reminders' },
             { id: 'qa-files', label: 'Files & Studio', desc: 'Create & download files', icon: FolderOpen, tab: 'files' },
@@ -1876,7 +1878,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
             )}
 
             <div>
-              <h2 className="text-2xl font-bold text-white">Call Pari AI</h2>
+              <h2 className="text-2xl font-bold text-white">Call {aiName} AI</h2>
               <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
                 One tap and you are talking — like calling Alexa. Speak naturally, interrupt anytime, hang up when done.
               </p>
@@ -2009,7 +2011,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                 <button
                   onClick={startLiveSession}
                   className="w-20 h-20 rounded-full text-xs font-bold transition-all shadow-xl shadow-rose-950/60 bg-gradient-to-br from-pink-500 to-fuchsia-600 hover:from-pink-500 hover:to-fuchsia-500 text-white flex flex-col items-center justify-center gap-1"
-                  title="Call Pari AI"
+                  title={`Call ${aiName} AI`}
                 >
                   <Phone className="w-7 h-7" />
                   <span>Call</span>
