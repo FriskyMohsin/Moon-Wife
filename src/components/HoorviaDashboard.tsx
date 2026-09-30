@@ -1097,7 +1097,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   const handleDownloadFile = async (downloadUrl: string, fallbackName: string) => {
     setFileError(null);
     try {
-      const res = await fetch(downloadUrl);
+      const res = await fetch(downloadUrl, { headers: authHeaders(token) });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || 'File not found on server — it may have been deleted.');
@@ -2728,14 +2728,13 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                         {f.createdAt && ` · ${new Date(f.createdAt).toLocaleDateString()}`}
                       </p>
                     </div>
-                    <a
-                      href={f.downloadUrl}
-                      download={f.filename}
+                    <button
+                      onClick={() => handleDownloadFile(f.downloadUrl, f.filename)}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-medium transition-colors shrink-0"
                     >
                       <Download className="w-3.5 h-3.5" />
                       Download
-                    </a>
+                    </button>
                   </div>
                 ))
               )}
