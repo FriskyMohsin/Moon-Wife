@@ -77,8 +77,8 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/a
         if (liveWsRef.current && liveWsRef.current.readyState === WebSocket.OPEN) {
           liveWsRef.current.send(
             JSON.stringify({
-              type: 'realtime_input',
-              mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: base64Pcm }],
+              type: 'audio',
+              audio: base64Pcm,
             })
           );
         }
