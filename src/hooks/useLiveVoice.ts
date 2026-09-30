@@ -10,6 +10,7 @@ interface UseLiveVoiceOptions {
   voice: string;
   aiName: string;
   hasBYOK: boolean;
+  wsPath?: string;
 }
 
 /**
@@ -17,7 +18,7 @@ interface UseLiveVoiceOptions {
  * Powers inline voice calls anywhere (e.g. owner home) without
  * mounting the full dashboard.
  */
-export function useLiveVoice({ auth: token, voice, aiName, hasBYOK }: UseLiveVoiceOptions) {
+export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/api/hoorvia/live-ws' }: UseLiveVoiceOptions) {
   const [liveState, setLiveState] = useState<LiveSessionState>('IDLE');
   const [liveStatus, setLiveStatus] = useState<string>(`Tap the call button and just talk to ${aiName}.`);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -120,7 +121,7 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK }: UseLiveVoi
 
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/hoorvia/live-ws?token=${encodeURIComponent(token)}`;
+      const wsUrl = `${protocol}//${window.location.host}${wsPath}?token=${encodeURIComponent(token)}`;
       const ws = new WebSocket(wsUrl);
       liveWsRef.current = ws;
 
@@ -170,7 +171,7 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK }: UseLiveVoi
       setLiveError(err.message || 'Failed to start the voice call.');
       stopLiveSession(false, 'init_exception');
     }
-  }, [token, voice, aiName, hasBYOK, stopLiveSession]);
+  }, [token, voice, aiName, hasBYOK, wsPath, stopLiveSession]);
 
   const toggleLive = useCallback(() => {
     if (liveState === 'CONNECTING' || liveState === 'LISTENING' || liveState === 'SPEAKING') {

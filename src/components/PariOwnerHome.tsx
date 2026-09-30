@@ -79,6 +79,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
     voice: initialCompanion?.voice || 'Aoede',
     aiName: 'Maryam',
     hasBYOK: true, // owner always has server key access
+    wsPath: '/api/live-ws', // Maryam owner route - speaks Roman Urdu
   });
 
   const openTab = (t: OwnerTab) => {
