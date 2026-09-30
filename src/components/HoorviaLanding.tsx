@@ -336,14 +336,23 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
               />
               {GEMINI_KEY_TUTORIAL_VIDEO_URL ? (
-                <a
-                  href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[11px] text-rose-300 hover:text-rose-200"
-                >
-                  ▶ How to get your Gemini API key? Watch tutorial
-                </a>
+                <div className="text-[11px] text-slate-400 leading-relaxed bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                  <p className="font-semibold text-slate-300 mb-1.5">How to get your free Gemini API key:</p>
+                  <ol className="list-decimal list-inside space-y-1">
+                    <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-rose-300 hover:text-rose-200 underline">aistudio.google.com/apikey</a></li>
+                    <li>Sign in with your Google account</li>
+                    <li>Click <strong className="text-slate-200">"Create API Key"</strong></li>
+                    <li>Copy the key and paste it above</li>
+                  </ol>
+                  <a
+                    href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-rose-300 hover:text-rose-200 mt-2 inline-block"
+                  >
+                    ▶ Watch video tutorial
+                  </a>
+                </div>
               ) : null}
               <div className="grid grid-cols-2 gap-3">
                 <select
