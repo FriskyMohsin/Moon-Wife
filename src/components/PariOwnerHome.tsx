@@ -61,6 +61,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   const [tab, setTab] = useState<OwnerTab>('home');
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraStarting, setCameraStarting] = useState(false);
   const [showPariReply, setShowPariReply] = useState<string | null>(null);
   const [isSendingPhoto, setIsSendingPhoto] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -95,7 +96,9 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
         CameraManager.getInstance().stopCamera();
         setCameraOn(false);
       } else {
+        setCameraStarting(true);
         const result = await CameraManager.getInstance().startCamera();
+        setCameraStarting(false);
         if (result.success) {
           setCameraOn(true);
         } else {
@@ -103,6 +106,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
         }
       }
     } catch (err: any) {
+      setCameraStarting(false);
       setCameraError(err?.message || 'Could not access camera.');
     }
   }, [cameraOn]);
@@ -152,7 +156,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
       }
       setShowPariReply(data.reply || data.text || 'Maryam ne dekha! 👀');
     } catch (err: any) {
-      setCameraError(err?.message || 'Failed to show photo to Pari.');
+      setCameraError(err?.message || 'Failed to show photo to Maryam.');
     } finally {
       setIsSendingPhoto(false);
     }
@@ -196,7 +200,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
           onClick={() => openTab('home')}
           className="fixed top-4 left-4 z-50 px-4 py-2 rounded-full bg-rose-500 hover:bg-rose-400 text-white text-sm font-semibold shadow-lg flex items-center gap-1.5"
         >
-          <Home size={14} /> Pari
+          <Home size={14} /> Maryam
         </button>
         <HoorviaDashboard
           token={token}
@@ -285,7 +289,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
         </div>
       )}
 
-      {/* Pari's reply to photo */}
+      {/* Maryam's reply to photo */}
       {showPariReply && (
         <div className="absolute bottom-36 left-4 right-36 z-10">
           <div className="bg-slate-900/90 backdrop-blur border border-rose-500/30 rounded-2xl p-3 shadow-2xl">
@@ -389,7 +393,7 @@ const OwnerTopBar: React.FC<{
       <button
         onClick={onBack}
         className="p-2 rounded-full bg-slate-800 hover:bg-slate-700 text-white"
-        title="Wapas Pari ke paas"
+        title="Wapas Maryam ke paas"
       >
         <Home size={16} />
       </button>
