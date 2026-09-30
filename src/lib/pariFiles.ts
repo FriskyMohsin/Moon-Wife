@@ -37,6 +37,7 @@ export type PariFileKind =
   | 'gif'
   | 'txt'
   | 'md'
+  | 'html'
   | 'csv';
 
 export interface PariFileMeta {

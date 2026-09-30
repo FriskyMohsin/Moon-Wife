@@ -54,12 +54,12 @@ export const PRODUCTIVITY_TOOL_DECLARATIONS: any[] = [
   {
     name: 'save_text_file',
     description:
-      "Save a prompt, note or any text the user dictated as a .txt or .md file in the user's Files & Studio tab.",
+      "Save a prompt, note, any text the user dictated, or a complete single-page HTML website as a .txt, .md or .html file in the user's Files & Studio tab. For websites, write the FULL standalone HTML (with inline CSS/JS) as the text content.",
     parameters: {
       type: 'OBJECT',
       properties: {
-        filename: { type: 'STRING', description: 'Desired filename, e.g. "pitch-prompt" or "notes.md".' },
-        text: { type: 'STRING', description: 'The full text content to save.' },
+        filename: { type: 'STRING', description: 'Desired filename, e.g. "pitch-prompt", "notes.md" or "my-website.html".' },
+        text: { type: 'STRING', description: 'The full text content to save. For .html files, the complete standalone HTML page.' },
       },
       required: ['filename', 'text'],
     },
@@ -191,11 +191,12 @@ export async function executeProductivityTool(
         const rawName = String(args?.filename || 'note');
         const text = String(args?.text || '');
         if (!text) return { ok: false, message: 'text is required.' };
-        const ext = rawName.toLowerCase().endsWith('.md') ? '.md' : '.txt';
+        const lowerName = rawName.toLowerCase();
+        const ext = lowerName.endsWith('.html') ? '.html' : lowerName.endsWith('.md') ? '.md' : '.txt';
         const stem = slugifyFilenameStem(rawName.replace(/\.[a-z0-9]+$/i, '')) || 'note';
         const filename = `${stem}${ext}`;
-        const kind: PariFileKind = ext === '.md' ? 'md' : 'txt';
-        const mime = ext === '.md' ? 'text/markdown' : 'text/plain';
+        const kind: PariFileKind = ext === '.html' ? 'html' : ext === '.md' ? 'md' : 'txt';
+        const mime = ext === '.html' ? 'text/html' : ext === '.md' ? 'text/markdown' : 'text/plain';
         const meta = await deps.saveFile(userId, filename, Buffer.from(text, 'utf-8'), mime, kind);
         deps.recordUsage(userId);
         return { ok: true, message: `Saved ${meta.filename} — find it in Files & Studio.`, filename: meta.filename, fileId: meta.id };
