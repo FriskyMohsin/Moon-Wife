@@ -80,25 +80,25 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
     if (stats.suspendedUsers > 0)
       attentionItems.push({
         icon: <Ban size={16} />,
-        text: `${stats.suspendedUsers} suspended user${stats.suspendedUsers > 1 ? 's' : ''} — worth a quick look`,
+        text: `${stats.suspendedUsers} suspended user${stats.suspendedUsers > 1 ? 's' : ''} — ek nazar daal lein`,
         tone: 'amber',
       });
     if (stats.byokSummary.invalid > 0)
       attentionItems.push({
         icon: <Key size={16} />,
-        text: `${stats.byokSummary.invalid} invalid API key${stats.byokSummary.invalid > 1 ? 's' : ''} need attention`,
+        text: `${stats.byokSummary.invalid} invalid API key${stats.byokSummary.invalid > 1 ? 's' : ''} — theek karne wali hain`,
         tone: 'amber',
       });
     if (stats.byokSummary.missing > 0)
       attentionItems.push({
         icon: <AlertTriangle size={16} />,
-        text: `${stats.byokSummary.missing} users haven't connected a key yet`,
+        text: `${stats.byokSummary.missing} users ne abhi tak key connect nahi ki`,
         tone: 'slate',
       });
     if (attentionItems.length === 0)
       attentionItems.push({
         icon: <ShieldCheck size={16} />,
-        text: "Everything looks good — nothing needs your attention",
+        text: "Sab theek chal raha hai — nothing needs your attention",
         tone: 'green',
       });
   }
@@ -137,7 +137,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               {greeting}, {ownerName}! 💛
             </h1>
             <p className="text-white/85 text-sm mt-1">
-              {today} — I've looked over everything, all ready for you
+              {today} — Sab kuch check kar liya hai, all ready for you
             </p>
           </div>
         </div>
@@ -153,7 +153,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
         ) : loading && !stats ? (
           <div className="bg-white rounded-2xl shadow p-12 text-center">
             <RefreshCw size={32} className="mx-auto text-rose-400 animate-spin mb-3" />
-            <p className="text-slate-600 text-sm">Checking everything for you… one moment</p>
+            <p className="text-slate-600 text-sm">Sab kuch dekh rahi hun… one moment</p>
           </div>
         ) : (
           <>
@@ -198,7 +198,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
             <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6 mt-6">
               <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
                 <Sparkles size={18} className="text-rose-500" />
-                Needs your attention
+                Needs your attention 👀
               </h2>
               <div className="space-y-3">
                 {attentionItems.map((a, i) => (
@@ -241,7 +241,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-400">No new signups yet</p>
+                  <p className="text-sm text-slate-400">Koi naya signup nahi aaya abhi</p>
                 )}
               </div>
 
@@ -249,7 +249,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6">
                 <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
                   <Heart size={18} className="text-rose-500" fill="currentColor" />
-                  How can I help?
+                  What can I do for you? 💛
                 </h2>
                 <div className="space-y-2">
                   <button
@@ -257,7 +257,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                     className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-medium hover:opacity-90 transition"
                   >
                     <span className="flex items-center gap-2">
-                      <Settings size={16} /> Open full control room
+                      <Settings size={16} /> Control room kholein
                     </span>
                     <ChevronRight size={16} />
                   </button>
@@ -272,7 +272,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                   </button>
                 </div>
                 <p className="text-xs text-slate-400 mt-4 leading-relaxed">
-                  Deep controls — users, keys, policies, audit logs — live in the control room. This dashboard is just a warm overview 💛
+                  Deep controls — users, keys, policies, audit logs — control room mein milenge. Ye dashboard sirf warm overview ke liye hai 💛
                 </p>
               </div>
             </div>
