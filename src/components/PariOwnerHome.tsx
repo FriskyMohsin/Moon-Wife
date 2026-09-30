@@ -62,6 +62,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [showPariReply, setShowPariReply] = useState<string | null>(null);
   const [isSendingPhoto, setIsSendingPhoto] = useState(false);
+  const [showCallOverlay, setShowCallOverlay] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const openTab = (t: OwnerTab) => {
@@ -103,10 +104,10 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
     };
   }, []);
 
-  // ---------- Show Pari (camera snapshot -> vision chat) ----------
+  // ---------- Show Maryam (camera snapshot -> vision chat) ----------
   const handleShowPari = async () => {
     if (!cameraOn) {
-      setCameraError('Turn on the camera first, phir "Show Pari" dabao.');
+      setCameraError('Turn on the camera first, phir "Show Maryam" dabao.');
       return;
     }
     setIsSendingPhoto(true);
@@ -130,9 +131,9 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Pari could not see the photo.');
+        throw new Error(data.error || 'Maryam could not see the photo.');
       }
-      setShowPariReply(data.reply || data.text || 'Pari ne dekha! 👀');
+      setShowPariReply(data.reply || data.text || 'Maryam ne dekha! 👀');
     } catch (err: any) {
       setCameraError(err?.message || 'Failed to show photo to Pari.');
     } finally {
@@ -195,12 +196,21 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   // ---------- Home: full-screen video-call style ----------
   return (
     <div className="relative min-h-screen bg-black overflow-hidden">
-      {/* Pari full-screen */}
+      {/* Maryam full-screen - animated talking video */}
       <div className="absolute inset-0 overflow-hidden">
+        <video
+          src="/maryam-avatar-talking.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="w-full h-full object-cover"
+        />
+        {/* Fallback static image if video fails */}
         <img
-          src="/pari-avatar-face.png"
-          alt="Pari"
-          className="w-full h-full object-cover animate-pari-float"
+          src="/maryam-avatar.png"
+          alt="Maryam"
+          className="w-full h-full object-cover absolute inset-0 -z-10"
           draggable={false}
         />
       </div>
@@ -219,7 +229,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
       <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-5 pt-5">
         <div>
           <h1 className="text-white text-xl font-bold flex items-center gap-2">
-            Pari <span className="text-rose-400">💛</span>
+            Maryam <span className="text-rose-400">💛</span>
           </h1>
           <p className="text-white/60 text-xs">Assalam-o-Alaikum, Mohsin! Main yahan hun.</p>
         </div>
@@ -253,7 +263,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
             className="mt-2 w-full px-2 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 disabled:opacity-60 text-white text-[11px] font-bold flex items-center justify-center gap-1"
           >
             {isSendingPhoto ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
-            {isSendingPhoto ? 'Dikha raha...' : 'Show Pari 📸'}
+            {isSendingPhoto ? 'Dikha raha...' : 'Show Maryam 📸'}
           </button>
         </div>
       )}
@@ -263,7 +273,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
         <div className="absolute bottom-36 left-4 right-36 z-10">
           <div className="bg-slate-900/90 backdrop-blur border border-rose-500/30 rounded-2xl p-3 shadow-2xl">
             <p className="text-[11px] font-bold text-rose-300 mb-1 flex items-center gap-1">
-              <Sparkles size={11} /> Pari ne dekha:
+              <Sparkles size={11} /> Maryam ne dekha:
             </p>
             <p className="text-xs text-slate-200 leading-relaxed max-h-32 overflow-y-auto">{showPariReply}</p>
             <button
@@ -305,8 +315,8 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
 
         <div className="flex flex-col items-center gap-1.5">
           <button
-            onClick={() => openTab('voice')}
-            title="Pari se live baat karo"
+            onClick={() => setShowCallOverlay(true)}
+            title="Maryam se live baat karo"
             className="p-6 rounded-full bg-gradient-to-br from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white shadow-2xl shadow-rose-900/50 transition-all hover:scale-105 active:scale-95"
           >
             <Phone size={30} />
@@ -328,6 +338,43 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
 
       {/* Bottom nav */}
       <OwnerBottomNav activeTab={tab} onSelect={openTab} />
+
+      {/* Inline call overlay - voice call right here, no redirect */}
+      {showCallOverlay && (
+        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col animate-fadeIn">
+          <div className="flex items-center justify-between px-5 pt-5">
+            <div className="flex items-center gap-3">
+              <video
+                src="/maryam-avatar-talking.mp4"
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="w-12 h-12 rounded-full object-cover border-2 border-rose-500/50"
+              />
+              <div>
+                <p className="text-white font-bold text-sm">Maryam 💛</p>
+                <p className="text-emerald-400 text-xs">Live call...</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowCallOverlay(false)}
+              title="Call band karo"
+              className="p-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-xl"
+            >
+              <PhoneOff size={20} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <HoorviaDashboard
+              user={user}
+              initialCompanion={initialCompanion}
+              onLogout={onLogout}
+              initialTab="voice"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
