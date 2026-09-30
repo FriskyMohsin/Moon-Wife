@@ -368,6 +368,11 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
           >
             {isLive ? <PhoneOff size={30} /> : <Phone size={30} />}
           </button>
+          {liveState !== 'IDLE' && (
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-black/50 text-yellow-300 font-mono">
+              {liveState}
+            </span>
+          )}
           <span className="text-[10px] text-white font-semibold">
             {isLive
               ? liveState === 'SPEAKING'

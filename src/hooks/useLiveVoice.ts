@@ -70,7 +70,9 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/a
     setLiveState('REQUESTING_MIC');
     setLiveStatus('Requesting microphone access...');
 
-    const audioManager = new GeminiLiveAudioManager({
+    let audioManager: GeminiLiveAudioManager;
+    try {
+      audioManager = new GeminiLiveAudioManager({
       onAudioData: (base64Pcm) => {
         if (liveWsRef.current && liveWsRef.current.readyState === WebSocket.OPEN) {
           liveWsRef.current.send(
@@ -88,7 +90,12 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/a
       onAudioLevel: (level) => setAudioLevel(level),
       onUserSpeechDetected: () => {},
       onError: (err) => console.error('[Live Audio Manager error]', err),
-    });
+      });
+    } catch (err: any) {
+      setLiveState('ERROR');
+      setLiveError('Audio system failed to start: ' + (err?.message || 'unknown error'));
+      return;
+    }
 
     audioManager.setGuestMode(true);
     audioManagerRef.current = audioManager;
