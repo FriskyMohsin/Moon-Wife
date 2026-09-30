@@ -345,15 +345,12 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
                     <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs outline-none"
-                >
-                  <option>English</option>
-                  <option>Roman Urdu</option>
-                  <option>Urdu</option>
-                </select>
+                <SearchableLanguagePicker
+                  selectedLanguage={language}
+                  onSelectLanguage={setLanguage}
+                  autoMatchLanguage={autoMatchLanguage}
+                  onToggleAutoMatch={setAutoMatchLanguage}
+                />
               </div>
             </>
           )}
