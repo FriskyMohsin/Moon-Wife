@@ -15,6 +15,7 @@ export {
   getUserGeminiModelAndKey,
   getEncryptedCredential,
 } from './src/lib/hoorviaPlatform';
+import { getUserGeminiApiKey as getOwnerGeminiApiKey } from './src/lib/hoorviaPlatform';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -623,8 +624,10 @@ ${proj || 'None'}
 
 // Lazy Gemini SDK client instance
 let genAiClient: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI {
-  if (!genAiClient) {
+function getGenAI(overrideApiKey?: string): GoogleGenAI {
+  const effectiveKey = overrideApiKey || process.env.GEMINI_API_KEY;
+  // Only use cached client when using env key (no override)
+  if (!genAiClient && !overrideApiKey) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY environment variable is missing.');
@@ -638,7 +641,17 @@ function getGenAI(): GoogleGenAI {
       },
     });
   }
-  return genAiClient;
+  if (overrideApiKey) {
+    return new GoogleGenAI({
+      apiKey: effectiveKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return genAiClient!;
 }
 
 const MARYAM_CORE_IDENTITY = `
@@ -5405,7 +5418,20 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
   if ((liveContextPump as any)?.unref) (liveContextPump as any).unref();
 
   try {
-    const ai = getGenAI();
+    // Owner BYOK fallback: use Mohsin's saved Gemini key if server env key is missing
+    let ownerByokKey: string | undefined;
+    if (!process.env.GEMINI_API_KEY) {
+      try {
+        const ownerKey = getOwnerGeminiApiKey('usr_mohsin_owner');
+        if (ownerKey) {
+          ownerByokKey = ownerKey;
+          console.log(`[${connectionId}] [OWNER_BYOK_FALLBACK] Using owner's saved Gemini key for Live Voice`);
+        }
+      } catch (e: any) {
+        console.warn(`[${connectionId}] [OWNER_BYOK_FALLBACK_FAILED]`, e?.message || e);
+      }
+    }
+    const ai = getGenAI(ownerByokKey);
 
     isLiveGuestMode = url.searchParams.get('guestMode') === 'true';
 
