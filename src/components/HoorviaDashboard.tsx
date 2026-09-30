@@ -48,7 +48,7 @@ import { subscribePush, unsubscribePush, isPushSubscribed } from '../lib/pwaClie
 
 const CLIENT_API = '/api/hoorvia/client';
 
-type TabId = 'home' | 'chat' | 'voice' | 'tasks' | 'reminders' | 'memory' | 'files' | 'usage' | 'settings';
+type TabId = 'home' | 'chat' | 'voice' | 'tasks' | 'reminders' | 'memory' | 'files' | 'downloads' | 'usage' | 'settings';
 
 interface TaskItem {
   id: string;
@@ -1226,7 +1226,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
   };
 
   useEffect(() => {
-    if (activeTab === 'files') loadMyFiles();
+    if (activeTab === 'files' || activeTab === 'downloads') loadMyFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -1325,6 +1325,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
     { id: 'reminders', label: 'Reminders', icon: Bell, glow: '#fbbf24' },
     { id: 'memory', label: 'Memory', icon: Brain, glow: '#e879f9' },
     { id: 'files', label: 'Files & Studio', icon: FolderOpen, glow: '#60a5fa' },
+    { id: 'downloads', label: 'Downloads', icon: Download, glow: '#f472b6' },
     { id: 'usage', label: 'Usage', icon: BarChart2, glow: '#2dd4bf' },
     { id: 'settings', label: 'Settings', icon: Settings, glow: '#94a3b8' },
   ];
@@ -2658,6 +2659,86 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= TAB: DOWNLOADS ================= */}
+        {activeTab === 'downloads' && (
+          <div className="space-y-6 max-w-3xl animate-fadeIn">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Downloads</h2>
+              <p className="text-sm text-slate-400 mt-1">
+                All your completed files — generated documents, uploads, and task outputs — in one place.
+              </p>
+            </div>
+
+            {/* Completed tasks with outputs */}
+            {tasks.filter((t) => t.status === 'done').length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
+                  Completed Tasks ({tasks.filter((t) => t.status === 'done').length})
+                </h3>
+                {tasks
+                  .filter((t) => t.status === 'done')
+                  .map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-slate-800/50 border border-slate-700/50"
+                    >
+                      <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-white truncate">{t.title}</p>
+                        {t.detail && <p className="text-xs text-slate-400 truncate">{t.detail}</p>}
+                      </div>
+                      <span className="text-xs text-slate-500 shrink-0">Done</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* All files */}
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
+                Files ({myFiles.length})
+              </h3>
+              {myFilesLoading ? (
+                <div className="flex items-center gap-2 text-slate-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading files...
+                </div>
+              ) : myFiles.length === 0 ? (
+                <div className="text-center py-10 text-slate-500">
+                  <Download className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                  <p className="text-sm">No downloads yet.</p>
+                  <p className="text-xs mt-1">Generate a file in Files & Studio or complete a task.</p>
+                </div>
+              ) : (
+                myFiles.map((f) => (
+                  <div
+                    key={f.id}
+                    className="flex items-center gap-3 p-3 rounded-xl bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-fuchsia-500/10 border border-fuchsia-500/20 flex items-center justify-center shrink-0">
+                      <FileText className="w-5 h-5 text-fuchsia-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{f.filename}</p>
+                      <p className="text-xs text-slate-400">
+                        {(f.size / 1024).toFixed(1)} KB
+                        {f.createdAt && ` · ${new Date(f.createdAt).toLocaleDateString()}`}
+                      </p>
+                    </div>
+                    <a
+                      href={f.downloadUrl}
+                      download={f.filename}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-medium transition-colors shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Download
+                    </a>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
