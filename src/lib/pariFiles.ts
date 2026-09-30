@@ -262,9 +262,17 @@ export async function buildPptx(
   const title = (input.title || 'Presentation').slice(0, 120);
   let slides = Array.isArray(input.slides) && input.slides.length > 0 ? input.slides : null;
   if (!slides) {
-    slides = (await draftSlides(apiKey, model, input.topic || title, input.slideCount || 8)) || [
-      { title, bullets: ['Add your content here.'] },
-    ];
+    slides = await draftSlides(apiKey, model, input.topic || title, input.slideCount || 8);
+    if (!slides || slides.length === 0) {
+      // AI draft failed — build slides from the raw topic/outline text so the PPT is never empty.
+      const raw = (input.topic || title).split(/\n+/).map((l) => l.trim()).filter(Boolean);
+      slides = raw.length > 0
+        ? raw.slice(0, 20).map((line, i) => ({
+            title: line.length > 80 ? line.slice(0, 80) : line || `Point ${i + 1}`,
+            bullets: line.length > 80 ? [line] : [],
+          }))
+        : [{ title, bullets: ['Add your content here.'] }];
+    }
   }
 
   const pres = new pptxgen();

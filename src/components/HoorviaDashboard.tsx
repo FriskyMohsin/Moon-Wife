@@ -1070,7 +1070,7 @@ export const HoorviaDashboard: React.FC<HoorviaDashboardProps> = ({
           'Content-Type': 'application/json',
           'X-Hoorvia-Token': token,
         },
-        body: JSON.stringify({ title: fileTitle.trim(), outline: fileOutline.trim() }),
+        body: JSON.stringify({ title: fileTitle.trim(), topic: fileOutline.trim() || fileTitle.trim(), outline: fileOutline.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 429) {
