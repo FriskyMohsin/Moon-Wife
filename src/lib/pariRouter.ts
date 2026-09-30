@@ -134,6 +134,15 @@ export function resolveModelKeyForUser(userId: string, requestedModel?: string):
       if (key) return { apiKey: key, model: cleanRequested, source: 'per_model' };
       // Decrypt failed -> fall through to default key with requested model.
     }
+  } else {
+    // No specific model requested: use the user's first decryptable per-model key.
+    // (Previously per-model keys were skipped entirely here, making keys saved
+    // via Provider Settings invisible to Live Voice / Studio / voice tools.)
+    const ownRecords = loadAll().filter((r) => r.userId === userId);
+    for (const record of ownRecords) {
+      const key = decryptRecord(record);
+      if (key) return { apiKey: key, model: record.model, source: 'per_model' };
+    }
   }
 
   const fallback = getUserGeminiModelAndKey(userId);

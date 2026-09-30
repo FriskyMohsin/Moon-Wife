@@ -23,6 +23,7 @@ import {
 } from './hoorviaPlatform';
 import { ApiAuditLog } from './hoorviaTypes';
 import { checkPariUsage, recordPariLiveMinutes } from './pariUsage';
+import { resolveModelKeyForUser } from './pariRouter';
 import {
   createRealtimeAudioInput,
   decodedBase64ByteLength,
@@ -98,9 +99,23 @@ export async function handleHoorviaLiveWsConnection(
   // 1. BYOK Credential Resolution - Strictly User's own key
   const isOwner = authUser.role === 'owner';
   const byokStatus = getBYOKCredentialStatus(userId);
-  const userModelAndKey = byokStatus.apiKey && byokStatus.model
+  let userModelAndKey = byokStatus.apiKey && byokStatus.model
     ? { apiKey: byokStatus.apiKey, model: byokStatus.model }
     : null;
+
+  // Fallback: per-model BYOK keys (Provider Settings saves here via pariRouter).
+  // Without this, a key saved in Settings is invisible to Live Voice (NO_CREDENTIAL).
+  if (!userModelAndKey) {
+    try {
+      const resolved = resolveModelKeyForUser(userId);
+      if (resolved?.apiKey) {
+        console.log(`[Hoorvia Live WS] User ${userId} using per-model BYOK key (source=${resolved.source}, model=${resolved.model})`);
+        userModelAndKey = { apiKey: resolved.apiKey, model: resolved.model };
+      }
+    } catch (e) {
+      console.warn(`[Hoorvia Live WS] per-model key fallback failed for ${userId}:`, (e as any)?.message || e);
+    }
+  }
 
   // For public users, their own validated BYOK API key is strictly required
   if (!isOwner && (!userModelAndKey || !userModelAndKey.apiKey)) {
