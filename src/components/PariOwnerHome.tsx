@@ -196,21 +196,31 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
   // ---------- Home: full-screen video-call style ----------
   return (
     <div className="relative min-h-screen bg-black overflow-hidden">
-      {/* Maryam full-screen - animated talking video */}
-      <div className="absolute inset-0 overflow-hidden">
+      {/* Maryam full-screen - animated talking video, never cropped */}
+      <div className="absolute inset-0 overflow-hidden bg-black">
+        {/* Blurred fill background */}
         <video
           src="/maryam-avatar-talking.mp4"
           autoPlay
           loop
           muted
           playsInline
-          className="w-full h-full object-cover object-top"
+          className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-60 scale-110"
+        />
+        {/* Sharp full video on top */}
+        <video
+          src="/maryam-avatar-talking.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-contain"
         />
         {/* Fallback static image if video fails */}
         <img
           src="/maryam-avatar.png"
           alt="Maryam"
-          className="w-full h-full object-cover absolute inset-0 -z-10"
+          className="w-full h-full object-contain absolute inset-0 -z-10"
           draggable={false}
         />
       </div>
