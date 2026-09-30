@@ -22,6 +22,11 @@ import {
   PRODUCTIVITY_TOOL_DECLARATIONS,
   executeProductivityTool,
 } from './src/lib/pariVoiceProductivityTools';
+import {
+  RESEARCH_TOOL_NAMES,
+  RESEARCH_TOOL_DECLARATIONS,
+  executeResearchTool,
+} from './src/lib/maryamResearchTools';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -770,6 +775,8 @@ VOICE TOOLS (server-side, always available — never say the tool runner is offl
 - save_text_file: save a note/prompt as .txt/.md, OR build a complete single-page WEBSITE as .html (write the FULL standalone HTML with inline CSS/JS as the text). When Mohsin asks for a website, use save_text_file with a .html filename — do NOT ask him to start any local runner.
 - generate_presentation: build a real PPTX file from a topic.
 - generate_document: build a real DOCX/PDF document.
+- search_videos: find real YouTube videos when he wants to SEE how something is done.
+- search_articles: research real articles/studies (medical→PubMed/WHO, tech→arXiv).
 Always call the matching tool FIRST and wait for its result before confirming. After success, tell him the file is in Files & Studio.
 `;
 
@@ -5488,6 +5495,10 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
             // Includes save_text_file with .html website support.
             functionDeclarations: PRODUCTIVITY_TOOL_DECLARATIONS,
           },
+          {
+            // Server-side research tools (Azure) — no local runner needed.
+            functionDeclarations: RESEARCH_TOOL_DECLARATIONS,
+          },
         ],
       },
       callbacks: {
@@ -5549,7 +5560,10 @@ liveWss.on('connection', async (clientWs: WebSocket, req) => {
               const result = (PRODUCTIVITY_TOOL_NAMES as readonly string[]).includes(toolName)
                 ? await executeProductivityTool('usr_mohsin_owner', toolName, toolArgs, { isOwner: true })
                     .catch((e: any) => ({ ok: false, message: e?.message || 'Action failed.' }))
-                : await dispatchToolToRunner(toolName, toolArgs, clientWs, true);
+                : (RESEARCH_TOOL_NAMES as readonly string[]).includes(toolName)
+                  ? await executeResearchTool(toolName, toolArgs)
+                      .catch((e: any) => ({ ok: false, message: e?.message || 'Search failed.' }))
+                  : await dispatchToolToRunner(toolName, toolArgs, clientWs, true);
 
               clientWs.send(JSON.stringify({
                 type: 'tool_call_complete',
