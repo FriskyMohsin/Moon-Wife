@@ -14,6 +14,7 @@ interface SearchableLanguagePickerProps {
   autoMatchLanguage?: boolean;
   onToggleAutoMatch?: (enabled: boolean) => void;
   readOnly?: boolean;
+  compact?: boolean;
 }
 
 export const SearchableLanguagePicker: React.FC<SearchableLanguagePickerProps> = ({
@@ -22,11 +23,13 @@ export const SearchableLanguagePicker: React.FC<SearchableLanguagePickerProps> =
   autoMatchLanguage = false,
   onToggleAutoMatch,
   readOnly = false,
+  compact = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'popular' | 'all'>('popular');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [customInput, setCustomInput] = useState<string>('');
   const [isAddingCustom, setIsAddingCustom] = useState<boolean>(false);
+  const [isOpen, setIsOpen] = useState<boolean>(false);
 
   const filtered = searchLanguages(searchQuery, activeTab);
   const activeObj = getLanguageByCodeOrName(selectedLanguage);
@@ -37,7 +40,144 @@ export const SearchableLanguagePicker: React.FC<SearchableLanguagePickerProps> =
     onSelectLanguage(customInput.trim());
     setCustomInput('');
     setIsAddingCustom(false);
+    setIsOpen(false);
   };
+
+  const handleSelect = (name: string) => {
+    onSelectLanguage(name);
+    setIsOpen(false);
+  };
+
+  // Compact mode: clean dropdown for landing pages
+  if (compact) {
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          disabled={readOnly}
+          onClick={() => setIsOpen(!isOpen)}
+          className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs outline-none flex items-center justify-between gap-2 hover:border-slate-700 transition-colors"
+        >
+          <span className="flex items-center gap-2 truncate">
+            <Globe className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className="truncate">{activeObj.name}</span>
+            {activeObj.nativeName !== activeObj.name && (
+              <span className="text-slate-500 truncate">({activeObj.nativeName})</span>
+            )}
+          </span>
+          <span className={`text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▾</span>
+        </button>
+
+        {isOpen && !readOnly && (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setIsOpen(false)}
+            />
+            <div className="absolute z-50 bottom-full mb-2 left-0 right-0 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+              <div className="p-3 border-b border-slate-800">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search language..."
+                    autoFocus
+                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-rose-500 placeholder-slate-500"
+                  />
+                </div>
+                <div className="flex gap-1.5 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('popular')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      activeTab === 'popular'
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-slate-950 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Popular ({POPULAR_LANGUAGES.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('all')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      activeTab === 'all'
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-slate-950 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    All ({ALL_LANGUAGES.length})
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-56 overflow-y-auto p-2">
+                {filtered.map((item) => {
+                  const isSelected =
+                    selectedLanguage.toLowerCase() === item.name.toLowerCase() ||
+                    selectedLanguage.toLowerCase() === item.code.toLowerCase();
+                  return (
+                    <button
+                      key={item.code}
+                      type="button"
+                      onClick={() => handleSelect(item.name)}
+                      className={`w-full px-3 py-2 rounded-xl text-left flex items-center justify-between transition-all ${
+                        isSelected
+                          ? 'bg-rose-950/80 text-white'
+                          : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="text-xs">
+                        <span className="font-medium">{item.name}</span>
+                        {item.nativeName !== item.name && (
+                          <span className="text-slate-500 ml-1.5">{item.nativeName}</span>
+                        )}
+                      </span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <div className="p-4 text-center text-slate-500 text-xs">
+                    No languages found for "{searchQuery}"
+                  </div>
+                )}
+              </div>
+              <div className="p-2 border-t border-slate-800">
+                {isAddingCustom ? (
+                  <form onSubmit={handleAddCustom} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customInput}
+                      onChange={(e) => setCustomInput(e.target.value)}
+                      placeholder="Type language name..."
+                      autoFocus
+                      className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-white text-xs focus:outline-none focus:border-rose-500"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shrink-0"
+                    >
+                      Add
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCustom(true)}
+                    className="w-full text-center text-[11px] text-rose-400 hover:text-rose-300 font-medium py-1"
+                  >
+                    + Other Language
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 bg-slate-950/80 p-4 rounded-2xl border border-slate-800 text-xs">

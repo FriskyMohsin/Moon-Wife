@@ -267,6 +267,14 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
       {/* Main Content — simple single page */}
       <main className="relative z-10 max-w-md w-full mx-auto px-6 py-10 flex-1 flex flex-col justify-center">
         <div className="text-center space-y-3 mb-8">
+          <div className="relative w-28 h-28 mx-auto">
+            <div className="absolute inset-0 rounded-full bg-rose-500/30 blur-xl" />
+            <img
+              src="/pari-avatar-face.png"
+              alt="Pari AI"
+              className="relative w-28 h-28 rounded-full object-cover border-2 border-rose-400/50 shadow-2xl"
+            />
+          </div>
           <h2 className="text-4xl font-extrabold tracking-tight text-white">
             Pari <span className="text-rose-400">AI</span>
           </h2>
@@ -367,8 +375,7 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
                 <SearchableLanguagePicker
                   selectedLanguage={language}
                   onSelectLanguage={setLanguage}
-                  autoMatchLanguage={autoMatchLanguage}
-                  onToggleAutoMatch={setAutoMatchLanguage}
+                  compact={true}
                 />
               </div>
             </>
