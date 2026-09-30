@@ -191,6 +191,20 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/a
 
   const isLive = liveState === 'CONNECTING' || liveState === 'LISTENING' || liveState === 'SPEAKING';
 
+  const sendVideoFrame = useCallback((imageBase64: string, mimeType: string = 'image/jpeg') => {
+    if (liveWsRef.current && liveWsRef.current.readyState === WebSocket.OPEN && isLive) {
+      try {
+        liveWsRef.current.send(
+          JSON.stringify({
+            type: 'video_frame',
+            imageBase64,
+            mimeType,
+          })
+        );
+      } catch {}
+    }
+  }, [isLive]);
+
   return {
     liveState,
     liveStatus,
@@ -202,5 +216,6 @@ export function useLiveVoice({ auth: token, voice, aiName, hasBYOK, wsPath = '/a
     isLive,
     toggleLive,
     stopLiveSession,
+    sendVideoFrame,
   };
 }

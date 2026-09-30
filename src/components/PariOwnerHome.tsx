@@ -75,6 +75,7 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
     liveDuration,
     isLive,
     toggleLive,
+    sendVideoFrame,
   } = useLiveVoice({
     auth: token,
     voice: initialCompanion?.voice || 'Aoede',
@@ -116,6 +117,27 @@ export const PariOwnerHome: React.FC<PariOwnerHomeProps> = ({
       CameraManager.getInstance().attachVideoElement(videoRef.current);
     }
   }, [cameraOn, tab]);
+
+  // Live vision: Maryam sees Mohsin during the call (frame every 3 sec)
+  useEffect(() => {
+    if (!cameraOn || !isLive) return;
+    const frameTimer = setInterval(() => {
+      try {
+        const video = videoRef.current;
+        if (!video || video.videoWidth === 0) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = Math.round((320 * video.videoHeight) / video.videoWidth) || 240;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const base64 = dataUrl.split(',')[1];
+        if (base64) sendVideoFrame(base64);
+      } catch {}
+    }, 3000);
+    return () => clearInterval(frameTimer);
+  }, [cameraOn, isLive, sendVideoFrame]);
 
   useEffect(() => {
     return () => {
