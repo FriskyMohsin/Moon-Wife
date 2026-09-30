@@ -335,6 +335,16 @@ export const HoorviaLanding: React.FC<HoorviaLandingProps> = ({
                 required
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-rose-800 outline-none"
               />
+              {GEMINI_KEY_TUTORIAL_VIDEO_URL ? (
+                <a
+                  href={GEMINI_KEY_TUTORIAL_VIDEO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-rose-300 hover:text-rose-200"
+                >
+                  ▶ How to get your Gemini API key? Watch tutorial
+                </a>
+              ) : null}
               <div className="grid grid-cols-2 gap-3">
                 <select
                   value={voice}
