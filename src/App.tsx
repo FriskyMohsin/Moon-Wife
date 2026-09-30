@@ -55,6 +55,7 @@ import { isGuestActivationRequested, isGuestDeactivationRequested } from './lib/
 import { HoorviaLanding } from './components/HoorviaLanding';
 import { HoorviaDashboard } from './components/HoorviaDashboard';
 import { HoorviaOwnerAdmin } from './components/HoorviaOwnerAdmin';
+import { PariOwnerDashboard } from './components/PariOwnerDashboard';
 import { DesktopShell } from './components/desktop/DesktopShell';
 import {
   getOwnerToken,
@@ -90,6 +91,7 @@ export default function App() {
     }
   });
   const [showOwnerAdmin, setShowOwnerAdmin] = useState<boolean>(false);
+  const [showFullAdmin, setShowFullAdmin] = useState<boolean>(false);
 
   // Application State
   const [memory, setMemory] = useState<MemoryBank>(loadMemoryBank);
@@ -1574,12 +1576,24 @@ export default function App() {
     hoorviaUser.id === 'usr_mohsin_owner'
   );
 
-  // Render Owner Admin Center if explicitly opened (only if verified)
-  if (showOwnerAdmin && isVerifiedOwner) {
+  // Render full technical Admin Center if explicitly opened from the owner dashboard
+  if (showFullAdmin && isVerifiedOwner) {
     return (
       <HoorviaOwnerAdmin
         token={hoorviaToken!}
+        onClose={() => setShowFullAdmin(false)}
+      />
+    );
+  }
+
+  // Render warm Owner Dashboard (AI-Wife style) if explicitly opened (only if verified)
+  if (showOwnerAdmin && isVerifiedOwner) {
+    return (
+      <PariOwnerDashboard
+        token={hoorviaToken!}
+        ownerName="Mohsin"
         onClose={() => setShowOwnerAdmin(false)}
+        onOpenFullAdmin={() => setShowFullAdmin(true)}
       />
     );
   }
