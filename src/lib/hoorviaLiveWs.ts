@@ -217,7 +217,7 @@ export async function handleHoorviaLiveWsConnection(
   const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
   let liveSession: any = null;
-  let selectedLiveModel = candidateLiveModels[0] || 'gemini-2.0-flash-exp';
+  let selectedLiveModel = candidateLiveModels[0] || 'gemini-3.8-live';
   let isConnected = false;
   const sessionStartTime = Date.now();
   let audioInputFrames = 0;

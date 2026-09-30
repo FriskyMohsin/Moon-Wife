@@ -2094,9 +2094,9 @@ export async function testAndValidateUserKey(userId: string): Promise<{
 }
 
 export const LIVE_COMPATIBLE_MODELS = [
-  'gemini-2.0-flash-exp',
   'gemini-3.8-live',
   'gemini-3.8-live-extended-thinking',
+  'gemini-2.0-flash-exp',
 ];
 
 export function getCompatibleLiveModelForUser(userId: string): string {
@@ -2107,7 +2107,7 @@ export function getCompatibleLiveModelForUser(userId: string): string {
       return model;
     }
   }
-  return 'gemini-2.0-flash-exp';
+  return 'gemini-3.8-live';
 }
 
 export function sanitizeErrorMessageForPublicUser(err: any): { userMessage: string; statusCode: number; errorType: string } {
