@@ -27,10 +27,10 @@ interface PariOwnerDashboardProps {
 }
 
 function greetingForHour(h: number): string {
-  if (h >= 5 && h < 12) return 'Good morning';
-  if (h >= 12 && h < 17) return 'Good afternoon';
-  if (h >= 17 && h < 21) return 'Good evening';
-  return 'Good night';
+  if (h >= 5 && h < 12) return 'Subah bakhair';
+  if (h >= 12 && h < 17) return 'Dopahar bakhair';
+  if (h >= 17 && h < 21) return 'Shaam bakhair';
+  return 'Raat bakhair';
 }
 
 export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
@@ -80,13 +80,13 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
     if (stats.suspendedUsers > 0)
       attentionItems.push({
         icon: <Ban size={16} />,
-        text: `${stats.suspendedUsers} suspended user${stats.suspendedUsers > 1 ? 's' : ''} — ek nazar daal lein`,
+        text: `${stats.suspendedUsers} user${stats.suspendedUsers > 1 ? 's' : ''} suspended hain — ek nazar daal lein`,
         tone: 'amber',
       });
     if (stats.byokSummary.invalid > 0)
       attentionItems.push({
         icon: <Key size={16} />,
-        text: `${stats.byokSummary.invalid} invalid API key${stats.byokSummary.invalid > 1 ? 's' : ''} — theek karne wali hain`,
+        text: `${stats.byokSummary.invalid} API key${stats.byokSummary.invalid > 1 ? 's' : ''} invalid hain`,
         tone: 'amber',
       });
     if (stats.byokSummary.missing > 0)
@@ -98,7 +98,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
     if (attentionItems.length === 0)
       attentionItems.push({
         icon: <ShieldCheck size={16} />,
-        text: "Sab theek chal raha hai — nothing needs your attention",
+        text: 'Sab theek chal raha hai — koi fikar wali baat nahi',
         tone: 'green',
       });
   }
@@ -118,7 +118,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
             onClick={onClose}
             className="flex items-center gap-2 text-white/90 hover:text-white text-sm font-medium"
           >
-            <ArrowLeft size={18} /> Back
+            <ArrowLeft size={18} /> Wapas
           </button>
           <button
             onClick={fetchStats}
@@ -137,7 +137,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               {greeting}, {ownerName}! 💛
             </h1>
             <p className="text-white/85 text-sm mt-1">
-              {today} — Sab kuch check kar liya hai, all ready for you
+              {today} — main ne ghar ka haal dekh liya hai, sab aap ke liye tayyar hai
             </p>
           </div>
         </div>
@@ -147,13 +147,13 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
         {unauthorized ? (
           <div className="bg-white rounded-2xl shadow p-8 text-center">
             <ShieldCheck size={40} className="mx-auto text-rose-400 mb-3" />
-            <p className="font-semibold text-slate-800">This area is for the owner only</p>
-            <p className="text-sm text-slate-500 mt-1">Owner verification didn't go through — please go back and try again</p>
+            <p className="font-semibold text-slate-800">Ye darwaza sirf owner ke liye hai</p>
+            <p className="text-sm text-slate-500 mt-1">Owner verification nahi hui — wapas ja kar dobara try karein</p>
           </div>
         ) : loading && !stats ? (
           <div className="bg-white rounded-2xl shadow p-12 text-center">
             <RefreshCw size={32} className="mx-auto text-rose-400 animate-spin mb-3" />
-            <p className="text-slate-600 text-sm">Sab kuch dekh rahi hun… one moment</p>
+            <p className="text-slate-600 text-sm">Ghar ka haal dekh rahi hun… ek second</p>
           </div>
         ) : (
           <>
@@ -162,7 +162,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               {[
                 {
                   icon: <Users size={20} className="text-rose-500" />,
-                  label: 'Total users',
+                  label: 'Hamare users',
                   value: stats?.totalUsers ?? 0,
                   sub: `${stats?.activeUsers ?? 0} active`,
                 },
@@ -170,11 +170,11 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                   icon: <Activity size={20} className="text-pink-500" />,
                   label: 'Live sessions',
                   value: stats?.activeSessions ?? 0,
-                  sub: 'chatting right now',
+                  sub: 'is waqt baat kar rahe',
                 },
                 {
                   icon: <MessageCircle size={20} className="text-amber-500" />,
-                  label: "Today's chats",
+                  label: 'Aaj ki baatein',
                   value: stats?.usageSummary.totalRequestsToday ?? 0,
                   sub: 'requests today',
                 },
@@ -182,7 +182,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                   icon: <Mic size={20} className="text-orange-500" />,
                   label: 'Voice minutes',
                   value: stats?.usageSummary.totalLiveMinutesToday ?? 0,
-                  sub: 'live voice today',
+                  sub: 'aaj live voice',
                 },
               ].map((c, i) => (
                 <div key={i} className="bg-white rounded-2xl shadow-sm border border-rose-100 p-5 hover:shadow-md transition">
@@ -198,7 +198,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
             <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6 mt-6">
               <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
                 <Sparkles size={18} className="text-rose-500" />
-                Needs your attention 👀
+                Tawajju chahiye
               </h2>
               <div className="space-y-3">
                 {attentionItems.map((a, i) => (
@@ -218,7 +218,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6">
                 <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
                   <UserPlus size={18} className="text-rose-500" />
-                  Recent signups
+                  Naye mehmaan
                 </h2>
                 {stats?.recentRegistrations?.length ? (
                   <div className="space-y-3">
@@ -241,7 +241,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-400">Koi naya signup nahi aaya abhi</p>
+                  <p className="text-sm text-slate-400">Abhi koi naya mehmaan nahi aaya</p>
                 )}
               </div>
 
@@ -249,7 +249,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
               <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6">
                 <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4">
                   <Heart size={18} className="text-rose-500" fill="currentColor" />
-                  What can I do for you? 💛
+                  Mere liye kuch karein?
                 </h2>
                 <div className="space-y-2">
                   <button
@@ -257,7 +257,7 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                     className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-medium hover:opacity-90 transition"
                   >
                     <span className="flex items-center gap-2">
-                      <Settings size={16} /> Control room kholein
+                      <Settings size={16} /> Poora control room kholein
                     </span>
                     <ChevronRight size={16} />
                   </button>
@@ -266,13 +266,13 @@ export const PariOwnerDashboard: React.FC<PariOwnerDashboardProps> = ({
                     className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-rose-50 text-rose-700 font-medium hover:bg-rose-100 transition"
                   >
                     <span className="flex items-center gap-2">
-                      <RefreshCw size={16} /> Refresh status
+                      <RefreshCw size={16} /> Taza haal dekhein
                     </span>
                     <ChevronRight size={16} />
                   </button>
                 </div>
                 <p className="text-xs text-slate-400 mt-4 leading-relaxed">
-                  Deep controls — users, keys, policies, audit logs — control room mein milenge. Ye dashboard sirf warm overview ke liye hai 💛
+                  Gehre controls — users, keys, policies, audit logs — control room mein milenge. Ye dashboard sirf pyaar bhari nazar ke liye hai 💛
                 </p>
               </div>
             </div>
